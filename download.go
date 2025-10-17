@@ -365,6 +365,18 @@ func (info *FileInfo) NeedsDownload(output string, force bool, noDecompress bool
 	}
 
 	var targetPath string
+	if info.DownloadURL != "" {
+		targetPath = filepath.Join(output, info.SeriesUID)
+		_, err := os.Stat(targetPath)
+		if os.IsNotExist(err) {
+			logger.Debugf("Target %s does not exist, need to download", targetPath)
+			return true
+		}
+		// If it exists, we assume it's downloaded. We don't have size/checksum info for these.
+		logger.Debugf("Direct download file %s exists, skipping", targetPath)
+		return false
+	}
+
 	if noDecompress {
 		// Check for ZIP file
 		targetPath = info.DcimFiles(output) + ".zip"
@@ -673,19 +685,85 @@ func isRetryableError(err error) bool {
 		strings.Contains(errStr, "504") // Gateway timeout
 }
 
-// doDownload performs the actual download
+// doDownload is a dispatcher for different download types
 func (info *FileInfo) doDownload(output string, httpClient *http.Client, authToken *Token, options *Options) error {
+	if info.DownloadURL != "" {
+		return info.downloadDirect(output, httpClient, options)
+	}
+	return info.downloadFromTCIA(output, httpClient, authToken, options)
+}
+
+// downloadDirect downloads a file from a direct URL without decompression
+func (info *FileInfo) downloadDirect(output string, httpClient *http.Client, options *Options) error {
+	logger.Debugf("Downloading direct from URL: %s", info.DownloadURL)
+
+	finalPath := filepath.Join(output, info.SeriesUID)
+	tempPath := finalPath + ".tmp"
+
+	// Clean up any previous temporary files
+	if _, err := os.Stat(tempPath); err == nil {
+		logger.Debugf("Removing incomplete download: %s", tempPath)
+		os.Remove(tempPath)
+	}
+
+	req, err := http.NewRequest("GET", info.DownloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+
+	// Use a reasonable timeout for direct downloads
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	resp, err := doRequest(httpClient, req)
+	if err != nil {
+		return fmt.Errorf("failed to do request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP error %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %v", err)
+	}
+	defer func() {
+		f.Close()
+		if err != nil {
+			os.Remove(tempPath)
+		}
+	}()
+
+	written, err := io.Copy(f, resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to write data after %d bytes: %v", written, err)
+	}
+
+	logger.Debugf("Downloaded %d bytes for %s", written, info.SeriesUID)
+
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close file: %v", err)
+	}
+
+	// Atomic rename to final location
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		return fmt.Errorf("failed to move file: %v", err)
+	}
+
+	logger.Debugf("Successfully saved %s as %s", info.SeriesUID, finalPath)
+	return nil
+}
+
+// downloadFromTCIA performs the actual download from TCIA, with decompression
+func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, authToken *Token, options *Options) error {
 	logger.Debugf("getting image file to %s", output)
 
-	var url_ string
-	var err error
-	if info.DownloadURL != "" {
-		url_ = info.DownloadURL
-	} else {
-		url_, err = makeURL(ImageUrl, map[string]interface{}{"SeriesInstanceUID": info.SeriesUID})
-		if err != nil {
-			return fmt.Errorf("failed to make URL: %v", err)
-		}
+	url_, err := makeURL(ImageUrl, map[string]interface{}{"SeriesInstanceUID": info.SeriesUID})
+	if err != nil {
+		return fmt.Errorf("failed to make URL: %v", err)
 	}
 
 	// Paths based on decompression mode
