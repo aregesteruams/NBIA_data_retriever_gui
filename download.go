@@ -323,6 +323,7 @@ type FileInfo struct {
 	SubjectID          string `json:"Subject ID"`
 	SeriesNumber       string `json:"Series Number"`
 	MD5Hash            string `json:"MD5 Hash,omitempty"`
+	DownloadURL        string `json:"downloadUrl,omitempty"`
 }
 
 // GetOutput construct the output directory (thread-safe)
@@ -675,9 +676,16 @@ func isRetryableError(err error) bool {
 // doDownload performs the actual download
 func (info *FileInfo) doDownload(output string, httpClient *http.Client, authToken *Token, options *Options) error {
 	logger.Debugf("getting image file to %s", output)
-	url_, err := makeURL(ImageUrl, map[string]interface{}{"SeriesInstanceUID": info.SeriesUID})
-	if err != nil {
-		return fmt.Errorf("failed to make URL: %v", err)
+
+	var url_ string
+	var err error
+	if info.DownloadURL != "" {
+		url_ = info.DownloadURL
+	} else {
+		url_, err = makeURL(ImageUrl, map[string]interface{}{"SeriesInstanceUID": info.SeriesUID})
+		if err != nil {
+			return fmt.Errorf("failed to make URL: %v", err)
+		}
 	}
 
 	// Paths based on decompression mode

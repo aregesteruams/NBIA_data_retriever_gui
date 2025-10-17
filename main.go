@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -56,6 +57,19 @@ func setupCloseHandler() {
 		fmt.Println("\r- Ctrl+C pressed in Terminal")
 		os.Exit(0)
 	}()
+}
+
+// decodeInputFile determines the input file type and calls the appropriate decoder
+func decodeInputFile(filePath string, client *http.Client, token *Token, options *Options) ([]*FileInfo, error) {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	switch ext {
+	case ".tcia":
+		return decodeTCIA(filePath, client, token, options), nil
+	case ".csv", ".tsv", ".xlsx":
+		return decodeSpreadsheet(filePath)
+	default:
+		return nil, fmt.Errorf("unsupported input file format: %s", ext)
+	}
 }
 
 // updateProgress prints the current download progress
@@ -133,7 +147,10 @@ func main() {
 		}
 
 		var wg sync.WaitGroup
-		files := decodeTCIA(options.Input, client, token, options)
+		files, err := decodeInputFile(options.Input, client, token, options)
+		if err != nil {
+			logger.Fatalf("Failed to decode input file: %v", err)
+		}
 		stats := &DownloadStats{Total: int32(len(files))}
 
 		// Initialize progress tracking
