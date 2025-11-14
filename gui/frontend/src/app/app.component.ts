@@ -1,5 +1,6 @@
 import { Component, OnInit } from '@angular/core';
-import { FetchFiles, OpenInputFileDialog, OpenOutputDirectoryDialog, RunCLIFetch } from '../../wailsjs/go/main/App';
+import { FetchFiles, OpenInputFileDialog, OpenOutputDirectoryDialog, RunFetch } from '../../wailsjs/go/main/App';
+import { EventsOn } from '../../wailsjs/runtime';
 
 
 @Component({
@@ -55,35 +56,15 @@ export class AppComponent implements OnInit {
       this.isDarkMode = e.matches;
     });
 
-    // Example sources
-    this.sources = [
-      {
-        id: 'src-1',
-        title: 'Source 1',
-        progress: 100,
-        accent: '#4caf50',
-        logs: ['Connecting…', 'Downloading series 1/5', 'Chunk 32/120', 'Writing file 00000001.dcm', 'Writing file 00000002.dcm', 'Rate 12.5 MB/s', 'ETA 01:45', 'Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45','Rate 12.5 MB/s', 'ETA 01:45'],
-        status: 'downloading'
-      },
-      {
-        id: 'src-2',
-        title: 'Source 2',
-        progress: 20,
-        accent: '#ff9800',
-        logs: ['Queued…', 'Preparing download', 'Resolving metadata', 'Starting…'],
-        status: 'queued'
-      },
-      {
-        id: 'src-3',
-        title: 'Source 3',
-        progress: 60,
-        accent: '#3f51b5',
-        logs: ['Downloading…', 'File 10/200', 'Rate 8.3 MB/s', 'ETA 02:14'],
-        status: 'downloading'
-      }
-    ];
-
     this.updateOverallProgress();
+
+    EventsOn('output', (data: string) => {
+      this.appendLog(data);
+    });
+
+    EventsOn('progress', (data: any) => {
+      this.status = `[${data.processed}/${data.total}] ${data.percentage.toFixed(1)}% | Downloaded: ${data.downloaded} | Skipped: ${data.skipped} | Failed: ${data.failed}${data.eta} | Current: ${data.currentId}`;
+    });
   }
 
   toggleDarkMode() {
@@ -102,46 +83,12 @@ export class AppComponent implements OnInit {
 
   onFetchFiles() {
     if (!this.inputFilePath || !this.outputDirPath) {
-      this.status = "Please select an input TCIA file, an output directory, and a Manifests directory.";
+      this.status = "Please select an input TCIA file, and an output directory.";
       return;
     }
 
-    // Reconstruct the exact CLI command for display (quote paths to handle spaces)
-    const cliPath = '../nbia-data-retriever-cli';
-    const parts: string[] = [];
-    parts.push(cliPath);
-    parts.push('-i');
-    parts.push(`"${this.inputFilePath}"`);
-    parts.push('--output');
-    parts.push(`"${this.outputDirPath}"`);
-    parts.push('--max-connections');
-    parts.push(String(this.maxConnections));
-    parts.push('--max-retries');
-    parts.push(String(this.maxRetries));
-    parts.push('--processes');
-    parts.push(String(this.simultaneousDownloads));
-    if (this.downloadInParallel) {
-      parts.push('--download-in-parallel');
-    }
-    if (this.skipExisting) {
-      parts.push('--skip-existing');
-    }
-    const cmdStr = parts.join(' ');
-
-    // Show command immediately in the status window
-    this.status = 'Running: ' + cmdStr;
-    this.appendLog(this.status);
-
-    // Call backend to run the CLI
-    RunCLIFetch(this.inputFilePath, this.outputDirPath, this.maxConnections, this.maxRetries, this.simultaneousDownloads, this.skipExisting, this.downloadInParallel)
-      .then((result: string) => {
-        this.status = result;
-        this.appendLog(result);
-      })
-      .catch(err => {
-        this.status = "Error: " + err;
-        this.appendLog(this.status);
-      });
+    this.outputLogs = [];
+    RunFetch(this.inputFilePath, this.outputDirPath, this.maxConnections, this.maxRetries, this.simultaneousDownloads, this.skipExisting, this.downloadInParallel);
   }
 
   onSelectInputFile() {

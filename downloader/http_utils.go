@@ -1,13 +1,13 @@
-package main
+package downloader
 
 import (
 	"net/http"
 	"strings"
 )
 
-// doRequest performs an HTTP request with automatic v2 -> v1 fallback
+// DoRequest performs an HTTP request with automatic v2 -> v1 fallback
 // This provides a graceful degradation when v2 endpoints are unavailable
-func doRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+func DoRequest(client *http.Client, req *http.Request) (*http.Response, error) {
 	// Save original URL for potential fallback
 	originalURL := req.URL.String()
 
@@ -22,7 +22,7 @@ func doRequest(client *http.Client, req *http.Request) (*http.Response, error) {
 	// Check if we should fallback to v1
 	// Fallback on: 404 (endpoint not found), 500-504 (server errors), 502 (bad gateway)
 	if resp.StatusCode == 404 || (resp.StatusCode >= 500 && resp.StatusCode <= 504) {
-		logger.Warnf("v2 endpoint returned %d, falling back to v1: %s", resp.StatusCode, originalURL)
+		Logger.Warnf("v2 endpoint returned %d, falling back to v1: %s", resp.StatusCode, originalURL)
 		resp.Body.Close()
 
 		// Create v1 URL
@@ -43,7 +43,7 @@ func doRequest(client *http.Client, req *http.Request) (*http.Response, error) {
 		}
 
 		// Try v1 endpoint
-		logger.Infof("Attempting v1 endpoint: %s", v1URL)
+		Logger.Infof("Attempting v1 endpoint: %s", v1URL)
 		return client.Do(v1Req)
 	}
 

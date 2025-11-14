@@ -1,4 +1,4 @@
-package main
+package downloader
 
 import (
 	"fmt"
@@ -42,11 +42,12 @@ type Options struct {
 	NoDecompress    bool
 	RefreshMetadata bool
 	MetadataWorkers int
+	DownloadInParallel bool
 
 	opt *getoptions.GetOpt
 }
 
-func InitOptions() *Options {
+func NewOptions() *Options {
 	opt := &Options{
 		opt:             getoptions.New(),
 		RetryDelay:      10 * time.Second,       // Server-friendly: 10 second initial retry delay
@@ -55,7 +56,7 @@ func InitOptions() *Options {
 		MetadataWorkers: 20,                     // Default metadata workers
 	}
 
-	setLogger(false, "")
+	SetLogger(false, "")
 
 	opt.opt.BoolVar(&opt.Help, "help", false, opt.opt.Alias("h"),
 		opt.opt.Description("show help information"))
@@ -105,10 +106,12 @@ func InitOptions() *Options {
 		opt.opt.Description("force refresh all metadata from server (ignore cache)"))
 	opt.opt.IntVar(&opt.MetadataWorkers, "metadata-workers", 20,
 		opt.opt.Description("number of parallel metadata fetch workers"))
+	opt.opt.BoolVar(&opt.DownloadInParallel, "download-in-parallel", true,
+		opt.opt.Description("download files in parallel"))
 
 	_, err := opt.opt.Parse(os.Args[1:])
 	if err != nil {
-		logger.Fatal(err)
+		Logger.Fatal(err)
 	}
 
 	// Apply server-friendly settings if enabled
@@ -118,11 +121,11 @@ func InitOptions() *Options {
 		opt.RetryDelay = 30 * time.Second
 		opt.RequestDelay = 2 * time.Second
 		opt.MetadataWorkers = 5  // Reduce metadata workers in server-friendly mode
-		logger.Info("Server-friendly mode: Using extra conservative settings")
+		Logger.Info("Server-friendly mode: Using extra conservative settings")
 	}
 
 	if opt.Debug || opt.SaveLog {
-		setLogger(opt.Debug, filepath.Join(opt.Output, "progress.log"))
+		SetLogger(opt.Debug, filepath.Join(opt.Output, "progress.log"))
 	}
 
 	if opt.opt.Called("help") || len(os.Args) < 2 {
@@ -132,36 +135,36 @@ func InitOptions() *Options {
 
 	// Validate incompatible options
 	if !opt.NoMD5 && opt.NoDecompress {
-		logger.Fatal("MD5 validation (default) and --no-decompress are incompatible. Use --no-md5 with --no-decompress.")
+		Logger.Fatal("MD5 validation (default) and --no-decompress are incompatible. Use --no-md5 with --no-decompress.")
 	}
 
 	if opt.TokenUrl != "" && opt.TokenUrl != TokenUrl {
 		TokenUrl = opt.TokenUrl
-		logger.Infof("Using custom token url: %s", TokenUrl)
+		Logger.Infof("Using custom token url: %s", TokenUrl)
 	}
 
 	if opt.MetaUrl != "" && opt.MetaUrl != MetaUrl {
 		MetaUrl = opt.MetaUrl
-		logger.Infof("Using custom meta url: %s", MetaUrl)
+		Logger.Infof("Using custom meta url: %s", MetaUrl)
 	}
 
 	// Set ImageUrl based on MD5 flag if not manually specified
 	if opt.ImageUrl != ImageUrl && opt.ImageUrl != "" {
 		// User specified a custom URL
 		ImageUrl = opt.ImageUrl
-		logger.Infof("Using custom image url: %s", ImageUrl)
+		Logger.Infof("Using custom image url: %s", ImageUrl)
 	} else if !opt.NoMD5 {
 		// Try v2 API first for MD5 support (will fallback to v1 if needed)
 		ImageUrl = "https://services.cancerimagingarchive.net/nbia-api/services/v2/getImageWithMD5Hash"
-		logger.Infof("Using MD5 validation endpoint (v2 with v1 fallback)")
+		Logger.Infof("Using MD5 validation endpoint (v2 with v1 fallback)")
 	}
 	// else use default ImageUrl (v2 getImage)
 
 	if opt.Prompt {
-		logger.Infof("Please input password for %s: ", opt.Username)
+		Logger.Infof("Please input password for %s: ", opt.Username)
 		_, err = fmt.Scanln(&opt.Password)
 		if err != nil {
-			logger.Fatalf("failed to scan prompt: %v", err)
+			Logger.Fatalf("failed to scan prompt: %v", err)
 		}
 	}
 

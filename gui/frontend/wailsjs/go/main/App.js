@@ -18,8 +18,8 @@ export function OpenOutputDirectoryDialog() {
   return window['go']['main']['App']['OpenOutputDirectoryDialog']();
 }
 
-export function RunCLIFetch(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
-  return window['go']['main']['App']['RunCLIFetch'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+export function RunFetch(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['RunFetch'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
 export function ShowDialog() {

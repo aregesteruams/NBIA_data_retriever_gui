@@ -1,4 +1,4 @@
-package main
+package downloader
 
 import (
 	"archive/tar"
@@ -83,8 +83,8 @@ func ToJSON(files []*FileInfo, output string) {
 	}
 }
 
-// copyFile copies a file from src to dst.
-func copyFile(src, dst string) error {
+// CopyFile copies a file from src to dst.
+func CopyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err

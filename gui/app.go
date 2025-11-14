@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"os/exec"
+	"io"
+	"os"
 
+	"github.com/GrigoryEvko/NBIA_data_retriever_CLI/downloader"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -40,28 +42,43 @@ func (b *App) OpenOutputDirectoryDialog() (string, error) {
 	return result, nil
 }
 
-// RunCLIFetch runs the CLI tool with the given manifest and output directory and advanced options
-func (b *App) RunCLIFetch(manifestPath string, outputDir string, maxConnections int, maxRetries int, simultaneousDownloads int, skipExisting bool, downloadInParallel bool) (string, error) {
-	cliPath := "../nbia-data-retriever-cli"
-	args := []string{"-i", manifestPath, "--output", outputDir,
-		"--max-connections", fmt.Sprintf("%d", maxConnections),
-		"--max-retries", fmt.Sprintf("%d", maxRetries),
-		"--processes", fmt.Sprintf("%d", simultaneousDownloads),
-	}
-	if skipExisting {
-		args = append(args, "--skip-existing")
-	}
+// RunFetch runs the CLI tool with the given manifest and output directory and advanced options
+func (b *App) RunFetch(manifestPath string, outputDir string, maxConnections int, maxRetries int, simultaneousDownloads int, skipExisting bool, downloadInParallel bool) {
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	os.Stderr = w
 
-	if downloadInParallel {
-		args = append(args, "--download-in-parallel")
-	}
+	go func() {
+		defer r.Close()
+		buf := make([]byte, 1024)
+		for {
+			n, err := r.Read(buf)
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				fmt.Println(err)
+				break
+			}
+			runtime.EventsEmit(b.ctx, "output", string(buf[:n]))
+		}
+	}()
 
-	cmd := exec.Command(cliPath, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(output), err
-	}
-	return string(output), nil
+	go func() {
+		options := &downloader.Options{
+			Input:           manifestPath,
+			Output:          outputDir,
+			MaxConnsPerHost: maxConnections,
+			MaxRetries:      maxRetries,
+			Concurrent:      simultaneousDownloads,
+			SkipExisting:    skipExisting,
+			DownloadInParallel: downloadInParallel,
+		}
+		downloader.Download(b.ctx, options, func(eventName string, data ...interface{}) {
+			runtime.EventsEmit(b.ctx, eventName, data...)
+		})
+		w.Close()
+	}()
 }
 
 type App struct {
