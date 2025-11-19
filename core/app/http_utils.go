@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"net/http"
@@ -22,7 +22,7 @@ func doRequest(client *http.Client, req *http.Request) (*http.Response, error) {
 	// Check if we should fallback to v1
 	// Fallback on: 404 (endpoint not found), 500-504 (server errors), 502 (bad gateway)
 	if resp.StatusCode == 404 || (resp.StatusCode >= 500 && resp.StatusCode <= 504) {
-		logger.Warnf("v2 endpoint returned %d, falling back to v1: %s", resp.StatusCode, originalURL)
+		Logger.Warnf("v2 endpoint returned %d, falling back to v1: %s", resp.StatusCode, originalURL)
 		resp.Body.Close()
 
 		// Create v1 URL
@@ -43,7 +43,7 @@ func doRequest(client *http.Client, req *http.Request) (*http.Response, error) {
 		}
 
 		// Try v1 endpoint
-		logger.Infof("Attempting v1 endpoint: %s", v1URL)
+		Logger.Infof("Attempting v1 endpoint: %s", v1URL)
 		return client.Do(v1Req)
 	}
 

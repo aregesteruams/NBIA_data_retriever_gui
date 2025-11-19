@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"encoding/json"
@@ -55,7 +55,7 @@ func (token *Token) GetAccessToken() (string, error) {
 		return token.AccessToken, nil
 	}
 
-	logger.Infof("Token expired, refreshing...")
+	Logger.Infof("Token expired, refreshing...")
 	newToken, err := createNewToken(token.username, token.password, token.path)
 	if err != nil {
 		return "", fmt.Errorf("failed to refresh token: %v", err)
@@ -75,7 +75,7 @@ func (token *Token) GetAccessToken() (string, error) {
 
 	// Save updated token
 	if err := token.dumpInternal(); err != nil {
-		logger.Warnf("Failed to save refreshed token: %v", err)
+		Logger.Warnf("Failed to save refreshed token: %v", err)
 	}
 
 	return token.AccessToken, nil
@@ -99,7 +99,7 @@ func makeURL(url_ string, values map[string]interface{}) (string, error) {
 
 // NewToken create token from official NBIA API
 func NewToken(username, passwd, path string) (*Token, error) {
-	logger.Debugf("creating token")
+	Logger.Debugf("creating token")
 	token := &Token{
 		username: username,
 		password: passwd,
@@ -107,11 +107,11 @@ func NewToken(username, passwd, path string) (*Token, error) {
 	}
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		logger.Infof("restore token from %v", path)
+		Logger.Infof("restore token from %v", path)
 		err = token.Load(path)
 		if err != nil {
-			logger.Error(err)
-			logger.Infof("create new token")
+			Logger.Error(err)
+			Logger.Infof("create new token")
 		} else if token.ExpiredTime.Compare(time.Now()) > 0 {
 			// Token is still valid
 			token.username = username
@@ -119,7 +119,7 @@ func NewToken(username, passwd, path string) (*Token, error) {
 			token.path = path
 			return token, nil
 		} else {
-			logger.Warn("token expired, create new token")
+			Logger.Warn("token expired, create new token")
 		}
 	}
 
@@ -152,7 +152,7 @@ func createNewToken(username, passwd, path string) (*Token, error) {
 	}
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := doRequest(client, req)
+	resp, err := doRequest(Client, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to do request: %v", err)
 	}
@@ -178,7 +178,7 @@ func createNewToken(username, passwd, path string) (*Token, error) {
 	// Save token
 	if path != "" {
 		if err := token.Dump(path); err != nil {
-			logger.Warnf("Failed to save token: %v", err)
+			Logger.Warnf("Failed to save token: %v", err)
 		}
 	}
 
@@ -198,7 +198,7 @@ func (token *Token) dumpInternal() error {
 		return nil
 	}
 
-	logger.Debugf("saving token to %s", token.path)
+	Logger.Debugf("saving token to %s", token.path)
 
 	// Create temp file first
 	tempPath := token.path + ".tmp"

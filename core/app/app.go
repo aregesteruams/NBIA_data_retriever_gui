@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -76,11 +76,11 @@ func (a *App) FetchFiles() string {
 	return "Done!"
 }
 
-func (b *App) startup(ctx context.Context) {
+func (b *App) Startup(ctx context.Context) {
 	b.ctx = ctx
 }
 
-func (b *App) shutdown(ctx context.Context) {
+func (b *App) Shutdown(ctx context.Context) {
 	// Perform teardown here
 }
 

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"archive/zip"
@@ -104,8 +104,8 @@ func getMetadataCachePath(output, seriesUID string) string {
 	return filepath.Join(output, "metadata", fmt.Sprintf("%s.json", seriesUID))
 }
 
-// createMetadataDir creates the metadata directory if it doesn't exist
-func createMetadataDir(output string) error {
+// CreateMetadataDir creates the metadata directory if it doesn't exist
+func CreateMetadataDir(output string) error {
 	metaDir := filepath.Join(output, "metadata")
 	if _, err := os.Stat(metaDir); os.IsNotExist(err) {
 		return os.MkdirAll(metaDir, 0755)
@@ -154,13 +154,13 @@ func saveMetadataToCache(info *FileInfo, cachePath string) error {
 	return os.Rename(tempFile, cachePath)
 }
 
-// decodeTCIA is used to decode the tcia file with parallel metadata fetching
-func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options *Options) []*FileInfo {
-	logger.Debugf("decoding tcia file: %s", path)
+// DecodeTCIA is used to decode the tcia file with parallel metadata fetching
+func DecodeTCIA(path string, httpClient *http.Client, authToken *Token, options *Options) []*FileInfo {
+	Logger.Debugf("decoding tcia file: %s", path)
 
 	f, err := os.Open(path)
 	if err != nil {
-		logger.Fatal(err)
+		Logger.Fatal(err)
 	}
 	defer f.Close()
 
@@ -174,7 +174,7 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		logger.Errorf("error reading tcia file: %v", err)
+		Logger.Errorf("error reading tcia file: %v", err)
 	}
 
 	fmt.Printf("Found %d series to fetch metadata for\n", len(seriesIDs))
@@ -211,7 +211,7 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 				if !options.RefreshMetadata {
 					// Try to load from cache
 					if cachedInfo, err := loadMetadataFromCache(cachePath); err == nil {
-						logger.Debugf("[Meta Worker %d] Loaded metadata from cache for: %s", workerID, seriesID)
+						Logger.Debugf("[Meta Worker %d] Loaded metadata from cache for: %s", workerID, seriesID)
 						mu.Lock()
 						results = append(results, cachedInfo)
 						mu.Unlock()
@@ -219,21 +219,21 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 						continue
 					}
 					// Cache miss or error, fetch from API
-					logger.Debugf("[Meta Worker %d] Cache miss, fetching metadata for: %s", workerID, seriesID)
+					Logger.Debugf("[Meta Worker %d] Cache miss, fetching metadata for: %s", workerID, seriesID)
 				} else {
-					logger.Debugf("[Meta Worker %d] Force refresh, fetching metadata for: %s", workerID, seriesID)
+					Logger.Debugf("[Meta Worker %d] Force refresh, fetching metadata for: %s", workerID, seriesID)
 				}
 
 				url_, err := makeURL(MetaUrl, map[string]interface{}{"SeriesInstanceUID": seriesID})
 				if err != nil {
-					logger.Errorf("[Meta Worker %d] Failed to make URL: %v", workerID, err)
+					Logger.Errorf("[Meta Worker %d] Failed to make URL: %v", workerID, err)
 					metaStats.updateProgress("failed", seriesID)
 					continue
 				}
 
 				req, err := http.NewRequest("GET", url_, nil)
 				if err != nil {
-					logger.Errorf("[Meta Worker %d] Failed to create request: %v", workerID, err)
+					Logger.Errorf("[Meta Worker %d] Failed to create request: %v", workerID, err)
 					metaStats.updateProgress("failed", seriesID)
 					continue
 				}
@@ -241,7 +241,7 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 				// Get current access token
 				accessToken, err := authToken.GetAccessToken()
 				if err != nil {
-					logger.Errorf("[Meta Worker %d] Failed to get access token: %v", workerID, err)
+					Logger.Errorf("[Meta Worker %d] Failed to get access token: %v", workerID, err)
 					metaStats.updateProgress("failed", seriesID)
 					continue
 				}
@@ -254,7 +254,7 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 				resp, err := doRequest(httpClient, req)
 				cancel() // Cancel context after request
 				if err != nil {
-					logger.Errorf("[Meta Worker %d] Failed to do request: %v", workerID, err)
+					Logger.Errorf("[Meta Worker %d] Failed to do request: %v", workerID, err)
 					metaStats.updateProgress("failed", seriesID)
 					continue
 				}
@@ -262,7 +262,7 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 				content, err := io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 				if err != nil {
-					logger.Errorf("[Meta Worker %d] Failed to read response data: %v", workerID, err)
+					Logger.Errorf("[Meta Worker %d] Failed to read response data: %v", workerID, err)
 					metaStats.updateProgress("failed", seriesID)
 					continue
 				}
@@ -270,8 +270,8 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 				files := make([]*FileInfo, 0)
 				err = json.Unmarshal(content, &files)
 				if err != nil {
-					logger.Errorf("[Meta Worker %d] Failed to parse response data: %v", workerID, err)
-					logger.Debugf("%s", content)
+					Logger.Errorf("[Meta Worker %d] Failed to parse response data: %v", workerID, err)
+					Logger.Debugf("%s", content)
 					metaStats.updateProgress("failed", seriesID)
 					continue
 				}
@@ -280,7 +280,7 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 				for _, file := range files {
 					if file.SeriesUID != "" {
 						if err := saveMetadataToCache(file, getMetadataCachePath(options.Output, file.SeriesUID)); err != nil {
-							logger.Warnf("[Meta Worker %d] Failed to cache metadata for %s: %v", workerID, file.SeriesUID, err)
+							Logger.Warnf("[Meta Worker %d] Failed to cache metadata for %s: %v", workerID, file.SeriesUID, err)
 						}
 					}
 				}
@@ -342,7 +342,7 @@ func (info *FileInfo) getOutput(output string) string {
 	// Double-check after acquiring lock
 	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
 		if err = os.MkdirAll(outputDir, 0755); err != nil {
-			logger.Fatal(err)
+			Logger.Fatal(err)
 		}
 	}
 
@@ -360,7 +360,7 @@ func (info *FileInfo) DcimFiles(output string) string {
 // NeedsDownload checks if files need to be downloaded
 func (info *FileInfo) NeedsDownload(output string, force bool, noDecompress bool) bool {
 	if force {
-		logger.Debugf("Force flag set, will re-download %s", info.SeriesUID)
+		Logger.Debugf("Force flag set, will re-download %s", info.SeriesUID)
 		return true
 	}
 
@@ -369,11 +369,11 @@ func (info *FileInfo) NeedsDownload(output string, force bool, noDecompress bool
 		targetPath = filepath.Join(output, info.SeriesUID)
 		_, err := os.Stat(targetPath)
 		if os.IsNotExist(err) {
-			logger.Debugf("Target %s does not exist, need to download", targetPath)
+			Logger.Debugf("Target %s does not exist, need to download", targetPath)
 			return true
 		}
 		// If it exists, we assume it's downloaded. We don't have size/checksum info for these.
-		logger.Debugf("Direct download file %s exists, skipping", targetPath)
+		Logger.Debugf("Direct download file %s exists, skipping", targetPath)
 		return false
 	}
 
@@ -388,27 +388,27 @@ func (info *FileInfo) NeedsDownload(output string, force bool, noDecompress bool
 	stat, err := os.Stat(targetPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			logger.Debugf("Target %s does not exist, need to download", targetPath)
+			Logger.Debugf("Target %s does not exist, need to download", targetPath)
 			return true
 		}
-		logger.Warnf("Error checking target %s: %v", targetPath, err)
+		Logger.Warnf("Error checking target %s: %v", targetPath, err)
 		return true
 	}
 
 	if noDecompress {
 		// For ZIP files, check if it's a regular file
 		if stat.IsDir() {
-			logger.Debugf("%s exists but is a directory, need to re-download", targetPath)
+			Logger.Debugf("%s exists but is a directory, need to re-download", targetPath)
 			return true
 		}
 		// For ZIP files, we can't easily verify the size as it's compressed
 		// Just check existence for now
-		logger.Debugf("ZIP file %s exists, skipping", targetPath)
+		Logger.Debugf("ZIP file %s exists, skipping", targetPath)
 		return false
 	} else {
 		// For extracted files, check if it's a directory
 		if !stat.IsDir() {
-			logger.Debugf("%s exists but is not a directory, need to re-download", targetPath)
+			Logger.Debugf("%s exists but is not a directory, need to re-download", targetPath)
 			return true
 		}
 
@@ -418,17 +418,17 @@ func (info *FileInfo) NeedsDownload(output string, force bool, noDecompress bool
 			if err == nil {
 				actualSize, err := getDirectorySize(targetPath)
 				if err != nil {
-					logger.Warnf("Error calculating directory size for %s: %v", targetPath, err)
+					Logger.Warnf("Error calculating directory size for %s: %v", targetPath, err)
 					return true
 				}
 				if actualSize != expectedSize {
-					logger.Debugf("Directory %s size mismatch: expected %d, got %d", targetPath, expectedSize, actualSize)
+					Logger.Debugf("Directory %s size mismatch: expected %d, got %d", targetPath, expectedSize, actualSize)
 					return true
 				}
 			}
 		}
 
-		logger.Debugf("Directory %s exists with correct size, skipping", targetPath)
+		Logger.Debugf("Directory %s exists with correct size, skipping", targetPath)
 		return false
 	}
 }
@@ -521,7 +521,7 @@ func extractAndVerifyZip(zipPath string, destDir string, expectedSize int64, md5
 			if actualMD5 != expectedMD5 {
 				md5Errors = append(md5Errors, fmt.Sprintf("%s: expected %s, got %s", file.Name, expectedMD5, actualMD5))
 			} else {
-				logger.Debugf("MD5 verified for %s", file.Name)
+				Logger.Debugf("MD5 verified for %s", file.Name)
 			}
 		}
 
@@ -547,7 +547,7 @@ func extractAndVerifyZip(zipPath string, destDir string, expectedSize int64, md5
 			return fmt.Errorf("size mismatch: expected %d bytes, extracted %d bytes", expectedSize, totalSize)
 		} else {
 			// In non-MD5 mode, we counted all files including non-imaging files, so just warn
-			logger.Warnf("Size mismatch (this may be due to non-imaging files in the archive): expected %d bytes, extracted %d bytes", expectedSize, totalSize)
+			Logger.Warnf("Size mismatch (this may be due to non-imaging files in the archive): expected %d bytes, extracted %d bytes", expectedSize, totalSize)
 		}
 	}
 
@@ -612,7 +612,7 @@ func parseMD5HashesCSV(zipPath string) (map[string]string, error) {
 }
 
 func (info *FileInfo) GetMeta(output string) error {
-	logger.Debugf("getting meta information and save to %s", output)
+	Logger.Debugf("getting meta information and save to %s", output)
 	f, err := os.OpenFile(info.MetaFile(output), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
 	if err != nil {
 		return fmt.Errorf("failed to open meta file %s: %v", info.MetaFile(output), err)
@@ -644,7 +644,7 @@ func (info *FileInfo) DownloadWithRetry(output string, httpClient *http.Client, 
 
 	for attempt := 0; attempt <= options.MaxRetries; attempt++ {
 		if attempt > 0 {
-			logger.Infof("Retrying download %s (attempt %d/%d) after %v delay", info.SeriesUID, attempt, options.MaxRetries, delay)
+			Logger.Infof("Retrying download %s (attempt %d/%d) after %v delay", info.SeriesUID, attempt, options.MaxRetries, delay)
 			time.Sleep(delay)
 			delay *= 2 // Exponential backoff
 		}
@@ -655,11 +655,11 @@ func (info *FileInfo) DownloadWithRetry(output string, httpClient *http.Client, 
 		}
 
 		lastErr = err
-		logger.Warnf("Download %s failed (attempt %d/%d): %v", info.SeriesUID, attempt+1, options.MaxRetries+1, err)
+		Logger.Warnf("Download %s failed (attempt %d/%d): %v", info.SeriesUID, attempt+1, options.MaxRetries+1, err)
 
 		// Check if error is retryable
 		if !isRetryableError(err) {
-			logger.Errorf("Non-retryable error for %s: %v", info.SeriesUID, err)
+			Logger.Errorf("Non-retryable error for %s: %v", info.SeriesUID, err)
 			return err
 		}
 	}
@@ -695,14 +695,14 @@ func (info *FileInfo) doDownload(output string, httpClient *http.Client, authTok
 
 // downloadDirect downloads a file from a direct URL without decompression
 func (info *FileInfo) downloadDirect(output string, httpClient *http.Client, options *Options) error {
-	logger.Debugf("Downloading direct from URL: %s", info.DownloadURL)
+	Logger.Debugf("Downloading direct from URL: %s", info.DownloadURL)
 
 	finalPath := filepath.Join(output, info.SeriesUID)
 	tempPath := finalPath + ".tmp"
 
 	// Clean up any previous temporary files
 	if _, err := os.Stat(tempPath); err == nil {
-		logger.Debugf("Removing incomplete download: %s", tempPath)
+		Logger.Debugf("Removing incomplete download: %s", tempPath)
 		os.Remove(tempPath)
 	}
 
@@ -742,7 +742,7 @@ func (info *FileInfo) downloadDirect(output string, httpClient *http.Client, opt
 		return fmt.Errorf("failed to write data after %d bytes: %v", written, err)
 	}
 
-	logger.Debugf("Downloaded %d bytes for %s", written, info.SeriesUID)
+	Logger.Debugf("Downloaded %d bytes for %s", written, info.SeriesUID)
 
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("failed to close file: %v", err)
@@ -753,13 +753,13 @@ func (info *FileInfo) downloadDirect(output string, httpClient *http.Client, opt
 		return fmt.Errorf("failed to move file: %v", err)
 	}
 
-	logger.Debugf("Successfully saved %s as %s", info.SeriesUID, finalPath)
+	Logger.Debugf("Successfully saved %s as %s", info.SeriesUID, finalPath)
 	return nil
 }
 
 // downloadFromTCIA performs the actual download from TCIA, with decompression
 func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, authToken *Token, options *Options) error {
-	logger.Debugf("getting image file to %s", output)
+	Logger.Debugf("getting image file to %s", output)
 
 	url_, err := makeURL(ImageUrl, map[string]interface{}{"SeriesInstanceUID": info.SeriesUID})
 	if err != nil {
@@ -782,7 +782,7 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 
 	// Clean up any previous temporary files
 	if _, err := os.Stat(tempZipPath); err == nil {
-		logger.Debugf("Removing incomplete download: %s", tempZipPath)
+		Logger.Debugf("Removing incomplete download: %s", tempZipPath)
 		os.Remove(tempZipPath)
 	}
 
@@ -790,7 +790,7 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 	if !options.NoDecompress {
 		tempExtractDir := finalPath + ".uncompressed.tmp"
 		if _, err := os.Stat(tempExtractDir); err == nil {
-			logger.Debugf("Removing incomplete extraction: %s", tempExtractDir)
+			Logger.Debugf("Removing incomplete extraction: %s", tempExtractDir)
 			os.RemoveAll(tempExtractDir)
 		}
 	}
@@ -821,7 +821,7 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 		// Default timeout for unknown size
 		timeout = 30 * time.Minute
 	}
-	logger.Debugf("Setting download timeout to %v for %s", timeout, info.SeriesUID)
+	Logger.Debugf("Setting download timeout to %v for %s", timeout, info.SeriesUID)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req = req.WithContext(ctx)
@@ -833,7 +833,7 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 	defer resp.Body.Close()
 
 	// Log response headers for debugging
-	logger.Debugf("Response headers for %s: Status=%s, Content-Length=%d, Transfer-Encoding=%s",
+	Logger.Debugf("Response headers for %s: Status=%s, Content-Length=%d, Transfer-Encoding=%s",
 		info.SeriesUID, resp.Status, resp.ContentLength, resp.Header.Get("Transfer-Encoding"))
 
 	// Check HTTP status
@@ -860,9 +860,9 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 
 	// Log download start
 	if resp.ContentLength > 0 {
-		logger.Debugf("Downloading %s (size: %d bytes)", info.SeriesUID, resp.ContentLength)
+		Logger.Debugf("Downloading %s (size: %d bytes)", info.SeriesUID, resp.ContentLength)
 	} else {
-		logger.Debugf("Downloading %s (size: unknown)", info.SeriesUID)
+		Logger.Debugf("Downloading %s (size: unknown)", info.SeriesUID)
 	}
 
 	// Buffer the response body for better handling of chunked transfers
@@ -872,15 +872,15 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 	written, err := io.Copy(f, bufferedReader)
 	if err != nil {
 		// Log detailed error information
-		logger.Errorf("Download error for %s: %v (written=%d bytes)", info.SeriesUID, err, written)
+		Logger.Errorf("Download error for %s: %v (written=%d bytes)", info.SeriesUID, err, written)
 		// Check if it's an EOF error (connection closed)
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			logger.Errorf("Connection closed prematurely by server for %s", info.SeriesUID)
+			Logger.Errorf("Connection closed prematurely by server for %s", info.SeriesUID)
 		}
 		return fmt.Errorf("failed to write data after %d bytes: %v", written, err)
 	}
 
-	logger.Debugf("Downloaded %d bytes for %s", written, info.SeriesUID)
+	Logger.Debugf("Downloaded %d bytes for %s", written, info.SeriesUID)
 
 	// Note: FileSize in manifest is the uncompressed size, but we download ZIP files
 	// So we cannot validate the downloaded size against FileSize
@@ -888,7 +888,7 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 	if info.FileSize != "" {
 		expectedSize, _ := strconv.ParseInt(info.FileSize, 10, 64)
 		compressionRatio := float64(written) / float64(expectedSize) * 100
-		logger.Debugf("Downloaded %s: %d bytes (%.1f%% of uncompressed size %d)",
+		Logger.Debugf("Downloaded %s: %d bytes (%.1f%% of uncompressed size %d)",
 			info.SeriesUID, written, compressionRatio, expectedSize)
 	}
 
@@ -902,7 +902,7 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 
 		// Remove any existing file
 		if _, err := os.Stat(finalPath); err == nil {
-			logger.Debugf("Removing existing file: %s", finalPath)
+			Logger.Debugf("Removing existing file: %s", finalPath)
 			if err := os.Remove(finalPath); err != nil {
 				return fmt.Errorf("failed to remove existing file: %v", err)
 			}
@@ -913,7 +913,7 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 			return fmt.Errorf("failed to move ZIP file: %v", err)
 		}
 
-		logger.Debugf("Successfully saved %s as %s", info.SeriesUID, finalPath)
+		Logger.Debugf("Successfully saved %s as %s", info.SeriesUID, finalPath)
 		return nil
 	} else {
 		// Decompression mode: extract and verify
@@ -930,28 +930,28 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 		if !options.NoMD5 {
 			md5Map, err = parseMD5HashesCSV(tempZipPath)
 			if err != nil {
-				logger.Warnf("Failed to parse MD5 hashes: %v", err)
+				Logger.Warnf("Failed to parse MD5 hashes: %v", err)
 				// Continue without MD5 validation
 				md5Map = nil
 			}
 		}
 
-		logger.Debugf("Extracting %s to %s", tempZipPath, tempExtractDir)
+		Logger.Debugf("Extracting %s to %s", tempZipPath, tempExtractDir)
 		if err := extractAndVerifyZip(tempZipPath, tempExtractDir, expectedSize, md5Map); err != nil {
 			// Clean up temp files on extraction failure
-			logger.Errorf("Extraction failed, cleaning up temporary files")
+			Logger.Errorf("Extraction failed, cleaning up temporary files")
 			if removeErr := os.Remove(tempZipPath); removeErr != nil {
-				logger.Warnf("Failed to remove temp ZIP after extraction error: %v", removeErr)
+				Logger.Warnf("Failed to remove temp ZIP after extraction error: %v", removeErr)
 			}
 			if removeErr := os.RemoveAll(tempExtractDir); removeErr != nil {
-				logger.Warnf("Failed to remove temp extract dir after error: %v", removeErr)
+				Logger.Warnf("Failed to remove temp extract dir after error: %v", removeErr)
 			}
 			return fmt.Errorf("failed to extract/verify ZIP: %v", err)
 		}
 
 		// Remove any existing output directory
 		if _, err := os.Stat(finalPath); err == nil {
-			logger.Debugf("Removing existing directory: %s", finalPath)
+			Logger.Debugf("Removing existing directory: %s", finalPath)
 			if err := os.RemoveAll(finalPath); err != nil {
 				return fmt.Errorf("failed to remove existing directory: %v", err)
 			}
@@ -960,22 +960,22 @@ func (info *FileInfo) downloadFromTCIA(output string, httpClient *http.Client, a
 		// Atomic rename from temp extraction to final location
 		if err := os.Rename(tempExtractDir, finalPath); err != nil {
 			// Clean up on rename failure
-			logger.Errorf("Rename failed, cleaning up temporary files")
+			Logger.Errorf("Rename failed, cleaning up temporary files")
 			if removeErr := os.RemoveAll(tempExtractDir); removeErr != nil {
-				logger.Warnf("Failed to remove temp extract dir after rename error: %v", removeErr)
+				Logger.Warnf("Failed to remove temp extract dir after rename error: %v", removeErr)
 			}
 			if removeErr := os.Remove(tempZipPath); removeErr != nil {
-				logger.Warnf("Failed to remove temp ZIP after rename error: %v", removeErr)
+				Logger.Warnf("Failed to remove temp ZIP after rename error: %v", removeErr)
 			}
 			return fmt.Errorf("failed to move extracted files: %v", err)
 		}
 
 		// Clean up the temporary ZIP file
 		if err := os.Remove(tempZipPath); err != nil {
-			logger.Warnf("Failed to remove temporary ZIP file %s: %v", tempZipPath, err)
+			Logger.Warnf("Failed to remove temporary ZIP file %s: %v", tempZipPath, err)
 		}
 
-		logger.Debugf("Successfully extracted %s to %s", info.SeriesUID, finalPath)
+		Logger.Debugf("Successfully extracted %s to %s", info.SeriesUID, finalPath)
 		return nil
 	}
 }

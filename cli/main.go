@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"github.com/aregesteruams/NBIA_data_retriever_gui/core/app"
 )
 
 var (
@@ -21,7 +22,7 @@ var (
 	goVersion  string
 	version    string
 	client     *http.Client
-	token      *Token
+	token      *app.Token
 	logger     *zap.SugaredLogger
 )
 
@@ -40,8 +41,8 @@ type DownloadStats struct {
 // WorkerContext contains all dependencies for workers
 type WorkerContext struct {
 	HTTPClient *http.Client
-	AuthToken  *Token
-	Options    *Options
+	AuthToken  *app.Token
+	Options    *app.Options
 	Stats      *DownloadStats
 	WorkerID   int
 }
@@ -60,13 +61,13 @@ func setupCloseHandler() {
 }
 
 // decodeInputFile determines the input file type and calls the appropriate decoder
-func decodeInputFile(filePath string, client *http.Client, token *Token, options *Options) ([]*FileInfo, error) {
+func decodeInputFile(filePath string, client *http.Client, token *app.Token, options *app.Options) ([]*app.FileInfo, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".tcia":
-		return decodeTCIA(filePath, client, token, options), nil
+		return app.DecodeTCIA(filePath, client, token, options), nil
 	case ".csv", ".tsv", ".xlsx":
-		return decodeSpreadsheet(filePath)
+		return app.DecodeSpreadsheet(filePath)
 	default:
 		return nil, fmt.Errorf("unsupported input file format: %s", ext)
 	}
@@ -118,7 +119,8 @@ func updateProgress(stats *DownloadStats, currentSeriesID string, debugMode bool
 func main() {
 	setupCloseHandler()
 
-	var options = InitOptions()
+	var options = app.InitOptions()
+	logger := app.Logger
 
 	if options.Version {
 		logger.Infof("Current version: %s", version)
@@ -127,13 +129,13 @@ func main() {
 		logger.Infof("Golang Version : %s", goVersion)
 		os.Exit(0)
 	} else {
-		client = newClient(options.Proxy, options.MaxConnsPerHost)
+		client = app.NewClient(options.Proxy, options.MaxConnsPerHost)
 
 		err := os.MkdirAll(options.Output, os.ModePerm)
 		if err != nil {
 			logger.Fatalf("failed to create output directory: %v", err)
 		}
-		token, err = NewToken(
+		token, err = app.NewToken(
 			options.Username, options.Password,
 			filepath.Join(options.Output, fmt.Sprintf("%s.json", options.Username)))
 
@@ -142,7 +144,7 @@ func main() {
 		}
 
 		// Create metadata directory
-		if err := createMetadataDir(options.Output); err != nil {
+		if err := app.CreateMetadataDir(options.Output); err != nil {
 			logger.Fatalf("Failed to create metadata directory: %v", err)
 		}
 
@@ -160,7 +162,7 @@ func main() {
 				logger.Fatalf("Failed to create metadata directory: %v", err)
 			}
 			destPath := filepath.Join(metaDir, filepath.Base(options.Input))
-			if err := copyFile(options.Input, destPath); err != nil {
+			if err := app.CopyFile(options.Input, destPath); err != nil {
 				logger.Warnf("Failed to copy spreadsheet to metadata folder: %v", err)
 			}
 		}
@@ -176,7 +178,7 @@ func main() {
 		}
 
 		wg.Add(options.Concurrent)
-		inputChan := make(chan *FileInfo, len(files)) // Larger buffer to prevent blocking
+		inputChan := make(chan *app.FileInfo, len(files)) // Larger buffer to prevent blocking
 
 		// Create worker contexts
 		for i := 0; i < options.Concurrent; i++ {
@@ -188,7 +190,7 @@ func main() {
 				WorkerID:   i + 1,
 			}
 
-			go func(ctx *WorkerContext, input chan *FileInfo) {
+			go func(ctx *WorkerContext, input chan *app.FileInfo) {
 				defer wg.Done()
 				for fileInfo := range input {
 					// Update progress display

@@ -1,5 +1,5 @@
 import { Component, OnInit } from '@angular/core';
-import { FetchFiles, OpenInputFileDialog, OpenOutputDirectoryDialog, RunCLIFetch } from '../../wailsjs/go/main/App';
+import { FetchFiles, OpenInputFileDialog, OpenOutputDirectoryDialog, RunCLIFetch } from '../../wailsjs/go/app/App';
 
 
 @Component({
