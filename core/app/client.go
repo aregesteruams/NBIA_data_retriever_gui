@@ -1,4 +1,4 @@
-package main
+package app 
 
 import (
 	"context"
@@ -9,10 +9,14 @@ import (
 	"time"
 )
 
-func newClient(proxy string, maxConnsPerHost int) *http.Client {
-	logger.Debugf("initializing http request client with max %d connections per host", maxConnsPerHost)
+var (
+	Client *http.Client
+)
+
+func NewClient(proxy string, maxConnsPerHost int) *http.Client {
+	Logger.Debugf("initializing http request client with max %d connections per host", maxConnsPerHost)
 	if proxy != "" {
-		logger.Debugf("using proxy %s", proxy)
+		Logger.Debugf("using proxy %s", proxy)
 	}
 
 	// Configure transport for parallel downloads (server-friendly settings)
@@ -42,15 +46,15 @@ func newClient(proxy string, maxConnsPerHost int) *http.Client {
 	if proxy != "" {
 		p, err := url.Parse(proxy)
 		if err != nil {
-			logger.Fatal("failed to parse proxy string: %v", err)
+			Logger.Fatal("failed to parse proxy string: %v", err)
 		}
 		transport.Proxy = http.ProxyURL(p)
 	}
 
-	client := &http.Client{
+	Client = &http.Client{
 		Transport: transport,
 		Timeout:   10 * time.Minute, // Global timeout for requests
 	}
 
-	return client
+	return Client
 }

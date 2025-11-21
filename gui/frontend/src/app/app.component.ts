@@ -1,6 +1,6 @@
 import { Component, OnInit, OnDestroy, ElementRef, ViewChild } from '@angular/core';
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime';
-import { FetchFiles, OpenInputFileDialog, OpenOutputDirectoryDialog, RunCLIFetch, CancelRun } from '../../wailsjs/go/main/App';
+import { FetchFiles, OpenInputFileDialog, OpenOutputDirectoryDialog, RunCLIFetch, CancelRun } from '../../wailsjs/go/app/App';
 
 // The GUI backend exposes SetAccessToken/ClearAccessToken methods. The generated
 // Wails bindings may not be present in some dev environments, so declare them

@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/GrigoryEvko/NBIA_data_retriever_CLI/internal/retriever"
+	"github.com/aregesteruams/NBIA_data_retriever_gui/core/app"
 )
 
 var (
@@ -24,7 +24,7 @@ var (
 	goVersion  string
 	version    string
 	client     *http.Client
-	token      *Token
+	token      *app.Token
 	logger     *zap.SugaredLogger
 )
 
@@ -43,8 +43,8 @@ type DownloadStats struct {
 // WorkerContext contains all dependencies for workers
 type WorkerContext struct {
 	HTTPClient *http.Client
-	AuthToken  *Token
-	Options    *Options
+	AuthToken  *app.Token
+	Options    *app.Options
 	Stats      *DownloadStats
 	WorkerID   int
 }
@@ -63,13 +63,13 @@ func setupCloseHandler() {
 }
 
 // decodeInputFile determines the input file type and calls the appropriate decoder
-func decodeInputFile(filePath string, client *http.Client, token *Token, options *Options) ([]*FileInfo, error) {
+func decodeInputFile(filePath string, client *http.Client, token *app.Token, options *app.Options) ([]*app.FileInfo, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".tcia":
 		// Use the retriever package to fetch metadata for TCIA manifests.
-		// Map main.Options to retriever.RunOptions for metadata fetching.
-		runOpts := retriever.RunOptions{
+		// Map main.Options to app.RunOptions for metadata fetching.
+		runOpts := app.RunOptions{
 			MaxConnections:  options.MaxConnsPerHost,
 			MaxRetries:      options.MaxRetries,
 			Processes:       options.Concurrent,
@@ -87,7 +87,7 @@ func decodeInputFile(filePath string, client *http.Client, token *Token, options
 			return token.GetAccessToken()
 		}
 
-		rfiles, err := retriever.FetchMetadata(context.Background(), filePath, options.Output, client, getToken, runOpts, func(line string) {
+		rfiles, err := app.FetchMetadata(context.Background(), filePath, options.Output, client, getToken, runOpts, func(line string) {
 			// Forward retriever logs to stderr (preserves original CLI behavior)
 			fmt.Fprintln(os.Stderr, line)
 		})
@@ -95,35 +95,9 @@ func decodeInputFile(filePath string, client *http.Client, token *Token, options
 			return nil, err
 		}
 
-		// Convert retriever.FileInfo to main.FileInfo
-		res := make([]*FileInfo, 0, len(rfiles))
-		for _, rf := range rfiles {
-			res = append(res, &FileInfo{
-				NumberOfImages:     rf.NumberOfImages,
-				SOPClassUID:        rf.SOPClassUID,
-				Manufacturer:       rf.Manufacturer,
-				DataDescriptionURI: rf.DataDescriptionURI,
-				LicenseURL:         rf.LicenseURL,
-				AnnotationSize:     rf.AnnotationSize,
-				Collection:         rf.Collection,
-				StudyDescription:   rf.StudyDescription,
-				SeriesUID:          rf.SeriesUID,
-				StudyUID:           rf.StudyUID,
-				LicenseName:        rf.LicenseName,
-				StudyDate:          rf.StudyDate,
-				SeriesDescription:  rf.SeriesDescription,
-				Modality:           rf.Modality,
-				RdPartyAnalysis:    rf.RdPartyAnalysis,
-				FileSize:           rf.FileSize,
-				SubjectID:          rf.SubjectID,
-				SeriesNumber:       rf.SeriesNumber,
-				MD5Hash:            rf.MD5Hash,
-				DownloadURL:        rf.DownloadURL,
-			})
-		}
-		return res, nil
+		return rfiles, nil
 	case ".csv", ".tsv", ".xlsx":
-		return decodeSpreadsheet(filePath)
+		return app.DecodeSpreadsheet(filePath)
 	default:
 		return nil, fmt.Errorf("unsupported input file format: %s", ext)
 	}
@@ -175,7 +149,8 @@ func updateProgress(stats *DownloadStats, currentSeriesID string, debugMode bool
 func main() {
 	setupCloseHandler()
 
-	var options = InitOptions()
+	var options = app.InitOptions()
+	logger := app.Logger
 
 	if options.Version {
 		logger.Infof("Current version: %s", version)
@@ -184,13 +159,13 @@ func main() {
 		logger.Infof("Golang Version : %s", goVersion)
 		os.Exit(0)
 	} else {
-		client = newClient(options.Proxy, options.MaxConnsPerHost)
+		client = app.NewClient(options.Proxy, options.MaxConnsPerHost)
 
 		err := os.MkdirAll(options.Output, os.ModePerm)
 		if err != nil {
 			logger.Fatalf("failed to create output directory: %v", err)
 		}
-		token, err = NewToken(
+		token, err = app.NewToken(
 			options.Username, options.Password,
 			filepath.Join(options.Output, fmt.Sprintf("%s.json", options.Username)))
 
@@ -199,7 +174,7 @@ func main() {
 		}
 
 		// Create metadata directory
-		if err := createMetadataDir(options.Output); err != nil {
+		if err := app.CreateMetadataDir(options.Output); err != nil {
 			logger.Fatalf("Failed to create metadata directory: %v", err)
 		}
 
@@ -216,14 +191,14 @@ func main() {
 				logger.Fatalf("Failed to create metadata directory: %v", err)
 			}
 			destPath := filepath.Join(metaDir, filepath.Base(options.Input))
-			if err := copyFile(options.Input, destPath); err != nil {
+			if err := app.CopyFile(options.Input, destPath); err != nil {
 				logger.Warnf("Failed to copy spreadsheet to metadata folder: %v", err)
 			}
 		}
 
 		// Use retriever orchestrator to process downloads (incremental refactor).
-		// Build adapters so retriever can call back into existing FileInfo methods.
-		adapters := make([]retriever.Downloadable, 0, len(files))
+		// Build adapters so retriever can call back into existing app.FileInfo methods.
+		adapters := make([]app.Downloadable, 0, len(files))
 		for _, f := range files {
 			// Create an adapter that captures the necessary dependencies
 			ad := &downloadAdapter{
@@ -236,12 +211,12 @@ func main() {
 		}
 
 		metaOnly := options.Meta
-		runOpts := retriever.RunOptions{
+		runOpts := app.RunOptions{
 			Processes:    options.Concurrent,
 			SkipExisting: options.SkipExisting,
 		}
 
-		summary, err := retriever.OrchestrateDownloads(context.Background(), adapters, options.Output, runOpts, metaOnly, func(line string) {
+		summary, err := app.OrchestrateDownloads(context.Background(), adapters, options.Output, runOpts, metaOnly, func(line string) {
 			// Forward logs to stderr to preserve CLI behavior
 			fmt.Fprintln(os.Stderr, line)
 		})
@@ -269,12 +244,12 @@ func main() {
 	}
 }
 
-// downloadAdapter adapts the main.FileInfo methods into the retriever.Downloadable interface.
+// downloadAdapter adapts the app.FileInfo methods into the app.Downloadable interface.
 type downloadAdapter struct {
-	fi         *FileInfo
+	fi         *app.FileInfo
 	httpClient *http.Client
-	authToken  *Token
-	options    *Options
+	authToken  *app.Token
+	options    *app.Options
 }
 
 func (d *downloadAdapter) NeedsDownload(output string) bool {

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"go.uber.org/zap"
@@ -7,6 +7,10 @@ import (
 	"time"
 
 	"go.uber.org/zap/zapcore"
+)
+
+var (
+	Logger *zap.SugaredLogger
 )
 
 // newEncoderConfig create EncoderConfig for zap
@@ -27,12 +31,12 @@ func newEncoderConfig() zapcore.EncoderConfig {
 	}
 }
 
-// timeEncoder format logger time format
+// timeEncoder format Logger time format
 func timeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 	enc.AppendString(t.Format("2006-01-02 15:04:05.000"))
 }
 
-// setLogger init the zap logger
+// setLogger init the zap Logger
 func setLogger(debug bool, logfile string) {
 	encoder := newEncoderConfig()
 	level := zap.WarnLevel
@@ -46,7 +50,7 @@ func setLogger(debug bool, logfile string) {
 		_ = os.MkdirAll(filepath.Dir(logfile), os.ModePerm)
 		f, err := os.OpenFile(logfile, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, os.ModePerm)
 		if err != nil {
-			logger.Warnf("failed save log to %s: %v", logfile, err)
+			Logger.Warnf("failed save log to %s: %v", logfile, err)
 		} else {
 			core = zapcore.NewTee(
 				zapcore.NewCore(zapcore.NewJSONEncoder(encoder), zapcore.AddSync(f), zap.DebugLevel),
@@ -57,5 +61,5 @@ func setLogger(debug bool, logfile string) {
 	}
 
 	defer func() { _ = logger_.Sync() }()
-	logger = logger_.Sugar()
+	Logger = logger_.Sugar()
 }

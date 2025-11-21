@@ -1,11 +1,10 @@
-package main
+package app
 
 import (
 	"context"
 	"fmt"
 	"sync"
 
-	"github.com/GrigoryEvko/NBIA_data_retriever_CLI/internal/retriever"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -43,7 +42,7 @@ func (b *App) OpenOutputDirectoryDialog() (string, error) {
 
 // RunCLIFetch runs the CLI tool with the given manifest and output directory and advanced options
 func (b *App) RunCLIFetch(manifestPath string, outputDir string, maxConnections int, maxRetries int, simultaneousDownloads int, skipExisting bool, downloadInParallel bool) (string, error) {
-	opts := retriever.RunOptions{
+	opts := RunOptions{
 		MaxConnections:     maxConnections,
 		MaxRetries:         maxRetries,
 		Processes:          simultaneousDownloads,
@@ -83,7 +82,7 @@ func (b *App) RunCLIFetch(manifestPath string, outputDir string, maxConnections 
 		return "", nil
 	}
 
-	return retriever.Run(ctx, manifestPath, outputDir, opts, getToken, logFn)
+	return Run(ctx, manifestPath, outputDir, opts, getToken, logFn)
 }
 
 // CancelRun cancels any currently running CLIFetch started via RunCLIFetch.
@@ -119,11 +118,11 @@ func (a *App) FetchFiles() string {
 	return "Done!"
 }
 
-func (b *App) startup(ctx context.Context) {
+func (b *App) Startup(ctx context.Context) {
 	b.ctx = ctx
 }
 
-func (b *App) shutdown(ctx context.Context) {
+func (b *App) Shutdown(ctx context.Context) {
 	// Perform teardown here
 }
 

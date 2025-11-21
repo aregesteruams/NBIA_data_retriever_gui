@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"encoding/csv"
@@ -129,8 +129,8 @@ func getSpreadsheetDecoder(filename string) (SpreadSheetDecoder, error) {
 	}
 }
 
-// decodeSpreadsheet decodes a spreadsheet file and returns a slice of FileInfo objects
-func decodeSpreadsheet(filePath string) ([]*FileInfo, error) {
+// DecodeSpreadsheet decodes a spreadsheet file and returns a slice of FileInfo objects
+func DecodeSpreadsheet(filePath string) ([]*FileInfo, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
