@@ -1,15 +1,10 @@
 package main
 
 import (
-	"archive/zip"
 	"bufio"
 	"context"
-	"crypto/md5"
-	"encoding/csv"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -18,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/GrigoryEvko/NBIA_data_retriever_CLI/internal/retriever"
 )
 
 // MetadataStats tracks metadata fetching progress
@@ -433,182 +430,19 @@ func (info *FileInfo) NeedsDownload(output string, force bool, noDecompress bool
 	}
 }
 
-
 // extractAndVerifyZip extracts a ZIP file and verifies the total uncompressed size and optional MD5 hashes
 func extractAndVerifyZip(zipPath string, destDir string, expectedSize int64, md5Map map[string]string) error {
-	reader, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return fmt.Errorf("failed to open zip: %v", err)
-	}
-	defer reader.Close()
-
-	// Create destination directory
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %v", err)
-	}
-
-	var totalSize int64
-	var md5Errors []string
-
-	// Check if we're in MD5 validation mode
-	md5Mode := len(md5Map) > 0
-
-	// Extract files
-	for _, file := range reader.File {
-		// Skip md5hashes.csv if present
-		if file.Name == "md5hashes.csv" {
-			continue
-		}
-
-		path := filepath.Join(destDir, file.Name)
-
-		// Ensure the file path is within destDir (security check)
-		if !strings.HasPrefix(path, filepath.Clean(destDir)+string(os.PathSeparator)) {
-			return fmt.Errorf("invalid file path in zip: %s", file.Name)
-		}
-
-		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(path, file.Mode()); err != nil {
-				return fmt.Errorf("failed to create directory: %v", err)
-			}
-			continue
-		}
-
-		// Create the directory for the file
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return fmt.Errorf("failed to create file directory: %v", err)
-		}
-
-		// Extract file
-		fileReader, err := file.Open()
-		if err != nil {
-			return fmt.Errorf("failed to open file in zip: %v", err)
-		}
-
-		targetFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
-		if err != nil {
-			fileReader.Close()
-			return fmt.Errorf("failed to create file: %v", err)
-		}
-
-		// Check if this file is in the MD5 map (i.e., it's an imaging file)
-		isImagingFile := false
-		expectedMD5 := ""
-		if md5Hash, ok := md5Map[file.Name]; ok {
-			isImagingFile = true
-			expectedMD5 = md5Hash
-		}
-
-		// If MD5 validation is needed, use a multi-writer
-		var writer io.Writer = targetFile
-		var hasher hash.Hash
-		if isImagingFile && expectedMD5 != "" {
-			hasher = md5.New()
-			writer = io.MultiWriter(targetFile, hasher)
-		}
-
-		written, err := io.Copy(writer, fileReader)
-		fileReader.Close()
-		targetFile.Close()
-
-		if err != nil {
-			return fmt.Errorf("failed to extract file %s: %v", file.Name, err)
-		}
-
-		// Verify MD5 if available
-		if hasher != nil && expectedMD5 != "" {
-			actualMD5 := hex.EncodeToString(hasher.Sum(nil))
-			if actualMD5 != expectedMD5 {
-				md5Errors = append(md5Errors, fmt.Sprintf("%s: expected %s, got %s", file.Name, expectedMD5, actualMD5))
-			} else {
-				logger.Debugf("MD5 verified for %s", file.Name)
-			}
-		}
-
-		// Only count size for imaging files in MD5 mode, or all files in non-MD5 mode
-		if md5Mode {
-			if isImagingFile {
-				totalSize += written
-			}
-		} else {
-			totalSize += written
-		}
-	}
-
-	// Report MD5 errors if any
-	if len(md5Errors) > 0 {
-		return fmt.Errorf("MD5 validation failed for %d files:\n%s", len(md5Errors), strings.Join(md5Errors, "\n"))
-	}
-
-	// Verify total size if expected size is provided
-	if expectedSize > 0 && totalSize != expectedSize {
-		if md5Mode {
-			// In MD5 mode, we know exactly which files are imaging files, so size should match
-			return fmt.Errorf("size mismatch: expected %d bytes, extracted %d bytes", expectedSize, totalSize)
-		} else {
-			// In non-MD5 mode, we counted all files including non-imaging files, so just warn
-			logger.Warnf("Size mismatch (this may be due to non-imaging files in the archive): expected %d bytes, extracted %d bytes", expectedSize, totalSize)
-		}
-	}
-
-	return nil
+	return retriever.ExtractAndVerifyZip(zipPath, destDir, expectedSize, md5Map)
 }
 
 // getDirectorySize calculates the total size of all files in a directory
 func getDirectorySize(dirPath string) (int64, error) {
-	var size int64
-	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			size += info.Size()
-		}
-		return nil
-	})
-	return size, err
+	return retriever.GetDirectorySize(dirPath)
 }
 
 // parseMD5HashesCSV parses the md5hashes.csv file from the ZIP and returns a map of filename to MD5 hash
 func parseMD5HashesCSV(zipPath string) (map[string]string, error) {
-	reader, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open zip: %v", err)
-	}
-	defer reader.Close()
-
-	// Find md5hashes.csv in the ZIP
-	for _, file := range reader.File {
-		if file.Name == "md5hashes.csv" {
-			rc, err := file.Open()
-			if err != nil {
-				return nil, fmt.Errorf("failed to open md5hashes.csv: %v", err)
-			}
-			defer rc.Close()
-
-			// Parse CSV
-			csvReader := csv.NewReader(rc)
-			records, err := csvReader.ReadAll()
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse CSV: %v", err)
-			}
-
-			// Build map (skip header)
-			md5Map := make(map[string]string)
-			for i, record := range records {
-				if i == 0 || len(record) < 2 {
-					continue // Skip header or invalid rows
-				}
-				filename := record[0]
-				md5Hash := record[1]
-				md5Map[filename] = md5Hash
-			}
-
-			return md5Map, nil
-		}
-	}
-
-	return nil, fmt.Errorf("md5hashes.csv not found in ZIP")
+	return retriever.ParseMD5HashesCSV(zipPath)
 }
 
 func (info *FileInfo) GetMeta(output string) error {
@@ -629,42 +463,68 @@ func (info *FileInfo) GetMeta(output string) error {
 }
 
 // Download is real function to download file with retry logic
-func (info *FileInfo) Download(output string, httpClient *http.Client, authToken *Token, options *Options) error {
+func (info *FileInfo) Download(ctx context.Context, output string, httpClient *http.Client, authToken *Token, options *Options) error {
 	// Add rate limiting delay between requests
 	if options.RequestDelay > 0 {
-		time.Sleep(options.RequestDelay)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(options.RequestDelay):
+		}
 	}
-	return info.DownloadWithRetry(output, httpClient, authToken, options)
+	return info.DownloadWithRetry(ctx, output, httpClient, authToken, options)
 }
 
 // DownloadWithRetry downloads file with retry logic and exponential backoff
-func (info *FileInfo) DownloadWithRetry(output string, httpClient *http.Client, authToken *Token, options *Options) error {
-	var lastErr error
-	delay := options.RetryDelay
-
-	for attempt := 0; attempt <= options.MaxRetries; attempt++ {
-		if attempt > 0 {
-			logger.Infof("Retrying download %s (attempt %d/%d) after %v delay", info.SeriesUID, attempt, options.MaxRetries, delay)
-			time.Sleep(delay)
-			delay *= 2 // Exponential backoff
-		}
-
-		err := info.doDownload(output, httpClient, authToken, options)
-		if err == nil {
-			return nil
-		}
-
-		lastErr = err
-		logger.Warnf("Download %s failed (attempt %d/%d): %v", info.SeriesUID, attempt+1, options.MaxRetries+1, err)
-
-		// Check if error is retryable
-		if !isRetryableError(err) {
-			logger.Errorf("Non-retryable error for %s: %v", info.SeriesUID, err)
-			return err
-		}
+func (info *FileInfo) DownloadWithRetry(ctx context.Context, output string, httpClient *http.Client, authToken *Token, options *Options) error {
+	// Convert to retriever.FileInfo and delegate to retriever.DownloadWithRetry
+	rf := &retriever.FileInfo{
+		NumberOfImages:     info.NumberOfImages,
+		SOPClassUID:        info.SOPClassUID,
+		Manufacturer:       info.Manufacturer,
+		DataDescriptionURI: info.DataDescriptionURI,
+		LicenseURL:         info.LicenseURL,
+		AnnotationSize:     info.AnnotationSize,
+		Collection:         info.Collection,
+		StudyDescription:   info.StudyDescription,
+		SeriesUID:          info.SeriesUID,
+		StudyUID:           info.StudyUID,
+		LicenseName:        info.LicenseName,
+		StudyDate:          info.StudyDate,
+		SeriesDescription:  info.SeriesDescription,
+		Modality:           info.Modality,
+		RdPartyAnalysis:    info.RdPartyAnalysis,
+		FileSize:           info.FileSize,
+		SubjectID:          info.SubjectID,
+		SeriesNumber:       info.SeriesNumber,
+		MD5Hash:            info.MD5Hash,
+		DownloadURL:        info.DownloadURL,
 	}
 
-	return fmt.Errorf("download failed after %d attempts: %v", options.MaxRetries+1, lastErr)
+	// Build retriever options mapping
+	rOpts := retriever.RunOptions{
+		MaxRetries:   options.MaxRetries,
+		RetryDelay:   int(options.RetryDelay / time.Second),
+		RequestDelay: int(options.RequestDelay / time.Millisecond),
+		NoDecompress: options.NoDecompress,
+		NoMD5:        options.NoMD5,
+		ImageUrl:     options.ImageUrl,
+		Force:        options.Force,
+	}
+
+	// Helper to get token
+	getToken := func() (string, error) {
+		if authToken == nil {
+			return "", fmt.Errorf("no token available")
+		}
+		return authToken.GetAccessToken()
+	}
+
+	// Delegate to retriever implementation
+	return retriever.DownloadWithRetry(ctx, rf, output, httpClient, getToken, doRequest, rOpts, func(line string) {
+		// Forward retriever logs to CLI logger
+		logger.Infof("[retriever] %s", line)
+	})
 }
 
 // isRetryableError checks if an error is retryable

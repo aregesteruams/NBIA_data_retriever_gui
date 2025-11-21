@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"go.uber.org/zap"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/GrigoryEvko/NBIA_data_retriever_CLI/internal/retriever"
 )
 
 var (
@@ -64,7 +67,61 @@ func decodeInputFile(filePath string, client *http.Client, token *Token, options
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".tcia":
-		return decodeTCIA(filePath, client, token, options), nil
+		// Use the retriever package to fetch metadata for TCIA manifests.
+		// Map main.Options to retriever.RunOptions for metadata fetching.
+		runOpts := retriever.RunOptions{
+			MaxConnections:  options.MaxConnsPerHost,
+			MaxRetries:      options.MaxRetries,
+			Processes:       options.Concurrent,
+			SkipExisting:    options.SkipExisting,
+			MetadataWorkers: options.MetadataWorkers,
+			RefreshMetadata: options.RefreshMetadata,
+			MetaUrl:         options.MetaUrl,
+		}
+
+		// Use token.GetAccessToken as the getter function
+		getToken := func() (string, error) {
+			if token == nil {
+				return "", fmt.Errorf("no token available")
+			}
+			return token.GetAccessToken()
+		}
+
+		rfiles, err := retriever.FetchMetadata(context.Background(), filePath, options.Output, client, getToken, runOpts, func(line string) {
+			// Forward retriever logs to stderr (preserves original CLI behavior)
+			fmt.Fprintln(os.Stderr, line)
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert retriever.FileInfo to main.FileInfo
+		res := make([]*FileInfo, 0, len(rfiles))
+		for _, rf := range rfiles {
+			res = append(res, &FileInfo{
+				NumberOfImages:     rf.NumberOfImages,
+				SOPClassUID:        rf.SOPClassUID,
+				Manufacturer:       rf.Manufacturer,
+				DataDescriptionURI: rf.DataDescriptionURI,
+				LicenseURL:         rf.LicenseURL,
+				AnnotationSize:     rf.AnnotationSize,
+				Collection:         rf.Collection,
+				StudyDescription:   rf.StudyDescription,
+				SeriesUID:          rf.SeriesUID,
+				StudyUID:           rf.StudyUID,
+				LicenseName:        rf.LicenseName,
+				StudyDate:          rf.StudyDate,
+				SeriesDescription:  rf.SeriesDescription,
+				Modality:           rf.Modality,
+				RdPartyAnalysis:    rf.RdPartyAnalysis,
+				FileSize:           rf.FileSize,
+				SubjectID:          rf.SubjectID,
+				SeriesNumber:       rf.SeriesNumber,
+				MD5Hash:            rf.MD5Hash,
+				DownloadURL:        rf.DownloadURL,
+			})
+		}
+		return res, nil
 	case ".csv", ".tsv", ".xlsx":
 		return decodeSpreadsheet(filePath)
 	default:
@@ -146,7 +203,6 @@ func main() {
 			logger.Fatalf("Failed to create metadata directory: %v", err)
 		}
 
-		var wg sync.WaitGroup
 		files, err := decodeInputFile(options.Input, client, token, options)
 		if err != nil {
 			logger.Fatalf("Failed to decode input file: %v", err)
@@ -165,116 +221,74 @@ func main() {
 			}
 		}
 
-		stats := &DownloadStats{Total: int32(len(files))}
-
-		// Initialize progress tracking
-		stats.StartTime = time.Now()
-		if options.Debug {
-			logger.Infof("Starting download of %d series with %d workers", len(files), options.Concurrent)
-		} else {
-			fmt.Fprintf(os.Stderr, "\nDownloading %d series with %d workers...\n\n", len(files), options.Concurrent)
-		}
-
-		wg.Add(options.Concurrent)
-		inputChan := make(chan *FileInfo, len(files)) // Larger buffer to prevent blocking
-
-		// Create worker contexts
-		for i := 0; i < options.Concurrent; i++ {
-			ctx := &WorkerContext{
-				HTTPClient: client,
-				AuthToken:  token,
-				Options:    options,
-				Stats:      stats,
-				WorkerID:   i + 1,
-			}
-
-			go func(ctx *WorkerContext, input chan *FileInfo) {
-				defer wg.Done()
-				for fileInfo := range input {
-					// Update progress display
-					updateProgress(ctx.Stats, fileInfo.SeriesUID, ctx.Options.Debug)
-					logger.Debugf("[Worker %d] Processing %s", ctx.WorkerID, fileInfo.SeriesUID)
-
-					// Skip metadata saving for spreadsheet inputs
-					isSpreadsheetInput := fileInfo.DownloadURL != ""
-
-					if ctx.Options.Meta {
-						if isSpreadsheetInput {
-							// For spreadsheets, --meta is a no-op, just skip.
-							logger.Debugf("[Worker %d] Skipping metadata for spreadsheet entry %s", ctx.WorkerID, fileInfo.SeriesUID)
-							atomic.AddInt32(&ctx.Stats.Skipped, 1)
-						} else {
-							// Only download metadata for TCIA inputs
-							if err := fileInfo.GetMeta(ctx.Options.Output); err != nil {
-								logger.Warnf("[Worker %d] Save meta info %s failed - %s", ctx.WorkerID, fileInfo.SeriesUID, err)
-								atomic.AddInt32(&ctx.Stats.Failed, 1)
-							} else {
-								atomic.AddInt32(&ctx.Stats.Downloaded, 1)
-							}
-						}
-						updateProgress(ctx.Stats, fileInfo.SeriesUID, ctx.Options.Debug)
-					} else {
-						// Download images (and save metadata for TCIA inputs)
-						if ctx.Options.SkipExisting && !fileInfo.NeedsDownload(ctx.Options.Output, false, ctx.Options.NoDecompress) {
-							logger.Debugf("[Worker %d] Skip existing %s", ctx.WorkerID, fileInfo.SeriesUID)
-							atomic.AddInt32(&ctx.Stats.Skipped, 1)
-							updateProgress(ctx.Stats, fileInfo.SeriesUID, ctx.Options.Debug)
-							continue
-						}
-
-						if fileInfo.NeedsDownload(ctx.Options.Output, ctx.Options.Force, ctx.Options.NoDecompress) {
-							if err := fileInfo.Download(ctx.Options.Output, ctx.HTTPClient, ctx.AuthToken, ctx.Options); err != nil {
-								logger.Warnf("[Worker %d] Download %s failed - %s", ctx.WorkerID, fileInfo.SeriesUID, err)
-								atomic.AddInt32(&ctx.Stats.Failed, 1)
-							} else {
-								// Save metadata only for TCIA inputs
-								if !isSpreadsheetInput {
-									if err := fileInfo.GetMeta(ctx.Options.Output); err != nil {
-										logger.Warnf("[Worker %d] Save meta info %s failed - %s", ctx.WorkerID, fileInfo.SeriesUID, err)
-									}
-								}
-								atomic.AddInt32(&ctx.Stats.Downloaded, 1)
-							}
-							updateProgress(ctx.Stats, fileInfo.SeriesUID, ctx.Options.Debug)
-						} else {
-							logger.Debugf("[Worker %d] Skip %s (already exists with correct size/checksum)", ctx.WorkerID, fileInfo.SeriesUID)
-							atomic.AddInt32(&ctx.Stats.Skipped, 1)
-							updateProgress(ctx.Stats, fileInfo.SeriesUID, ctx.Options.Debug)
-						}
-					}
-				}
-			}(ctx, inputChan)
-		}
-
+		// Use retriever orchestrator to process downloads (incremental refactor).
+		// Build adapters so retriever can call back into existing FileInfo methods.
+		adapters := make([]retriever.Downloadable, 0, len(files))
 		for _, f := range files {
-			inputChan <- f
-		}
-		close(inputChan)
-		wg.Wait()
-
-		// Final progress update
-		updateProgress(stats, "Complete", options.Debug)
-
-		// Clear progress line in non-debug mode
-		if !options.Debug {
-			fmt.Fprintf(os.Stderr, "\n")
+			// Create an adapter that captures the necessary dependencies
+			ad := &downloadAdapter{
+				fi:         f,
+				httpClient: client,
+				authToken:  token,
+				options:    options,
+			}
+			adapters = append(adapters, ad)
 		}
 
-		elapsed := time.Since(stats.StartTime)
+		metaOnly := options.Meta
+		runOpts := retriever.RunOptions{
+			Processes:    options.Concurrent,
+			SkipExisting: options.SkipExisting,
+		}
+
+		summary, err := retriever.OrchestrateDownloads(context.Background(), adapters, options.Output, runOpts, metaOnly, func(line string) {
+			// Forward logs to stderr to preserve CLI behavior
+			fmt.Fprintln(os.Stderr, line)
+		})
+
+		if err != nil {
+			logger.Warnf("Orchestrator returned error: %v", err)
+		}
+
+		// Print summary similar to previous behavior
 		fmt.Println("\n=== Download Summary ===")
-		fmt.Printf("Total files: %d\n", stats.Total)
-		fmt.Printf("Downloaded: %d\n", stats.Downloaded)
-		fmt.Printf("Skipped: %d\n", stats.Skipped)
-		fmt.Printf("Failed: %d\n", stats.Failed)
-		fmt.Printf("Total time: %s\n", elapsed.Round(time.Second))
+		fmt.Printf("Total files: %d\n", summary.Total)
+		fmt.Printf("Downloaded: %d\n", summary.Downloaded)
+		fmt.Printf("Skipped: %d\n", summary.Skipped)
+		fmt.Printf("Failed: %d\n", summary.Failed)
+		fmt.Printf("Total time: %s\n", summary.Elapsed.Round(time.Second))
 
-		if stats.Total > 0 {
-			rate := float64(stats.Downloaded+stats.Skipped) / elapsed.Seconds()
+		if summary.Total > 0 {
+			rate := float64(summary.Downloaded+summary.Skipped) / summary.Elapsed.Seconds()
 			fmt.Printf("Average rate: %.1f files/second\n", rate)
 		}
 
-		if stats.Failed > 0 {
+		if summary.Failed > 0 {
 			logger.Warnf("Some downloads failed. Check the logs above for details.")
 		}
 	}
+}
+
+// downloadAdapter adapts the main.FileInfo methods into the retriever.Downloadable interface.
+type downloadAdapter struct {
+	fi         *FileInfo
+	httpClient *http.Client
+	authToken  *Token
+	options    *Options
+}
+
+func (d *downloadAdapter) NeedsDownload(output string) bool {
+	return d.fi.NeedsDownload(output, d.options.Force, d.options.NoDecompress)
+}
+
+func (d *downloadAdapter) Download(ctx context.Context, output string) error {
+	return d.fi.Download(ctx, output, d.httpClient, d.authToken, d.options)
+}
+
+func (d *downloadAdapter) GetMeta(output string) error {
+	return d.fi.GetMeta(output)
+}
+
+func (d *downloadAdapter) SeriesID() string {
+	return d.fi.SeriesUID
 }

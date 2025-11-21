@@ -1,10 +1,13 @@
-module gui
+module github.com/GrigoryEvko/NBIA_data_retriever_CLI/gui
 
-go 1.22.0
+go 1.24
 
 toolchain go1.24.4
 
-require github.com/wailsapp/wails/v2 v2.10.2
+require (
+	github.com/GrigoryEvko/NBIA_data_retriever_CLI v0.0.0-00010101000000-000000000000
+	github.com/wailsapp/wails/v2 v2.10.2
+)
 
 require (
 	github.com/bep/debounce v1.2.1 // indirect
@@ -19,7 +22,7 @@ require (
 	github.com/leaanthony/gosod v1.0.4 // indirect
 	github.com/leaanthony/slicer v1.6.0 // indirect
 	github.com/leaanthony/u v1.1.1 // indirect
-	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -32,6 +35,8 @@ require (
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/net v0.35.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
+	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 )
+
+replace github.com/GrigoryEvko/NBIA_data_retriever_CLI => ../

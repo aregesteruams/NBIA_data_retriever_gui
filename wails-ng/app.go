@@ -19,7 +19,6 @@ func (b *App) startup(ctx context.Context) {
 	b.ctx = ctx
 }
 
-
 func (b *App) shutdown(ctx context.Context) {
 	// Perform your teardown here
 }

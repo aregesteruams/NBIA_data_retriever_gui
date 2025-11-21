@@ -1,12 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
+	"sync"
 
+	"github.com/GrigoryEvko/NBIA_data_retriever_CLI/internal/retriever"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -44,70 +43,72 @@ func (b *App) OpenOutputDirectoryDialog() (string, error) {
 
 // RunCLIFetch runs the CLI tool with the given manifest and output directory and advanced options
 func (b *App) RunCLIFetch(manifestPath string, outputDir string, maxConnections int, maxRetries int, simultaneousDownloads int, skipExisting bool, downloadInParallel bool) (string, error) {
-	cliPath := "../nbia-data-retriever-cli"
-	args := []string{"-i", manifestPath, "--output", outputDir,
-		"--max-connections", fmt.Sprintf("%d", maxConnections),
-		"--max-retries", fmt.Sprintf("%d", maxRetries),
-		"--processes", fmt.Sprintf("%d", simultaneousDownloads),
-	}
-	if skipExisting {
-		args = append(args, "--skip-existing")
+	opts := retriever.RunOptions{
+		MaxConnections:     maxConnections,
+		MaxRetries:         maxRetries,
+		Processes:          simultaneousDownloads,
+		SkipExisting:       skipExisting,
+		DownloadInParallel: downloadInParallel,
 	}
 
-	if downloadInParallel {
-		// Note: the CLI does not expose a `--download-in-parallel` flag.
-		// This option is handled internally by the CLI via --processes/other flags.
-		// We intentionally do not pass an unsupported flag to the CLI to avoid an error.
-	}
+	// Create a cancellable child context for this run so GUI can cancel it
+	ctx, cancel := context.WithCancel(b.ctx)
 
-	cmd := exec.Command(cliPath, args...)
+	// Store cancel func so other methods can cancel the run
+	b.runMu.Lock()
+	b.runCancel = cancel
+	b.runMu.Unlock()
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", fmt.Errorf("failed to capture stdout: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return "", fmt.Errorf("failed to capture stderr: %w", err)
-	}
+	// Ensure we clear the cancel func when done
+	defer func() {
+		b.runMu.Lock()
+		b.runCancel = nil
+		b.runMu.Unlock()
+	}()
 
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("failed to start command: %w", err)
-	}
-
-	var lines []string
-	emit := func(line string) {
-		// Emit to frontend listeners
+	// Forward logs from the retriever to the frontend runtime events
+	logFn := func(line string) {
 		runtime.EventsEmit(b.ctx, "cli-output-line", line)
-		lines = append(lines, line)
 	}
 
-	// Stream stdout
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			emit(scanner.Text())
+	// Hook up token provider from GUI if set
+	getToken := func() (string, error) {
+		// read token from App state if available
+		b.runMu.Lock()
+		defer b.runMu.Unlock()
+		// accessToken stored in runCancel? we will add accessToken field
+		if b.accessToken != "" {
+			return b.accessToken, nil
 		}
-	}()
-
-	// Stream stderr
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			emit(scanner.Text())
-		}
-	}()
-
-	if err := cmd.Wait(); err != nil {
-		combined := strings.Join(lines, "\n")
-		return combined, fmt.Errorf("%w: %s", err, combined)
+		return "", nil
 	}
 
-	return strings.Join(lines, "\n"), nil
+	return retriever.Run(ctx, manifestPath, outputDir, opts, getToken, logFn)
+}
+
+// CancelRun cancels any currently running CLIFetch started via RunCLIFetch.
+func (b *App) CancelRun() error {
+	b.runMu.Lock()
+	cancel := b.runCancel
+	b.runMu.Unlock()
+
+	if cancel == nil {
+		return fmt.Errorf("no active run to cancel")
+	}
+	cancel()
+	// Emit a notice to the frontend
+	runtime.EventsEmit(b.ctx, "cli-output-line", "[GUI] Cancel requested")
+	return nil
 }
 
 type App struct {
 	ctx context.Context
+	// runCancel holds the cancel function for the currently running fetch (if any)
+	runCancel context.CancelFunc
+	runMu     sync.Mutex
+	// accessToken is an optional OAuth token provided by the GUI
+	accessToken string
+	tokenMu     sync.Mutex
 }
 
 func NewApp() *App {
@@ -140,4 +141,24 @@ func (b *App) ShowDialog() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+// SetAccessToken stores an access token that will be used by retriever.Run
+// when making authenticated requests. Call from the frontend when a token is
+// available (e.g., from a login flow).
+func (b *App) SetAccessToken(token string) error {
+	b.tokenMu.Lock()
+	b.accessToken = token
+	b.tokenMu.Unlock()
+	runtime.EventsEmit(b.ctx, "cli-output-line", "[GUI] Access token set")
+	return nil
+}
+
+// ClearAccessToken clears any previously set access token.
+func (b *App) ClearAccessToken() error {
+	b.tokenMu.Lock()
+	b.accessToken = ""
+	b.tokenMu.Unlock()
+	runtime.EventsEmit(b.ctx, "cli-output-line", "[GUI] Access token cleared")
+	return nil
 }

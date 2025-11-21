@@ -47,9 +47,13 @@
       </div>
       <!-- Bottom Action Bar -->
       <div class="action-bar">
-        <button (click)="onFetchFiles()" class="fetch-btn">
+        <button (click)="onFetchFiles()" class="fetch-btn" [disabled]="isRunning || !inputFilePath || !outputDirPath">
           <span class="material-icons-outlined">file_download</span>
           Fetch Files
+        </button>
+        <button *ngIf="isRunning" (click)="onCancelRun()" class="cancel-btn">
+          <span class="material-icons-outlined">cancel</span>
+          Cancel
         </button>
       </div>
     </div>
@@ -85,6 +89,14 @@
               <input type="checkbox" [(ngModel)]="skipExisting" class="setting-checkbox">
               Skip Existing
             </label>
+          </div>
+          <div class="setting-item token-item">
+            <label class="setting-label">Access Token (optional):</label>
+            <input type="text" [(ngModel)]="accessTokenInput" class="setting-input" placeholder="Paste access token">
+            <div class="token-actions">
+              <button (click)="setAccessToken()" class="token-set">Set Token</button>
+              <button (click)="clearAccessToken()" class="token-clear">Clear Token</button>
+            </div>
           </div>
         </div>
       </div>

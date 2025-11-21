@@ -117,7 +117,7 @@ func InitOptions() *Options {
 		opt.MaxConnsPerHost = 2
 		opt.RetryDelay = 30 * time.Second
 		opt.RequestDelay = 2 * time.Second
-		opt.MetadataWorkers = 5  // Reduce metadata workers in server-friendly mode
+		opt.MetadataWorkers = 5 // Reduce metadata workers in server-friendly mode
 		logger.Info("Server-friendly mode: Using extra conservative settings")
 	}
 

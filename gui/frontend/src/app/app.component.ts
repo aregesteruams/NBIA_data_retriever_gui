@@ -1,6 +1,12 @@
 import { Component, OnInit, OnDestroy, ElementRef, ViewChild } from '@angular/core';
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime';
-import { FetchFiles, OpenInputFileDialog, OpenOutputDirectoryDialog, RunCLIFetch } from '../../wailsjs/go/main/App';
+import { FetchFiles, OpenInputFileDialog, OpenOutputDirectoryDialog, RunCLIFetch, CancelRun } from '../../wailsjs/go/main/App';
+
+// The GUI backend exposes SetAccessToken/ClearAccessToken methods. The generated
+// Wails bindings may not be present in some dev environments, so declare them
+// here to avoid type errors and call them at runtime.
+declare function SetAccessToken(token: string): Promise<void>;
+declare function ClearAccessToken(): Promise<void>;
 
 
 @Component({
@@ -37,6 +43,12 @@ export class AppComponent implements OnInit {
 
   // Overall download progress
   overallProgress = 0;
+
+  // Running state
+  isRunning = false;
+
+  // Access token input (optional)
+  accessTokenInput = '';
 
   // Per-source progress model
   sources: Array<{
@@ -157,16 +169,46 @@ export class AppComponent implements OnInit {
     this.status = 'Running: ' + cmdStr;
     this.appendLog(this.status);
 
-    // Call backend to run the CLI
+    // Mark running state and call backend to run the CLI
+    this.isRunning = true;
     RunCLIFetch(this.inputFilePath, this.outputDirPath, this.maxConnections, this.maxRetries, this.simultaneousDownloads, this.skipExisting, this.downloadInParallel)
       .then((result: string) => {
         this.status = result;
         this.appendLog(result);
+        this.isRunning = false;
       })
       .catch(err => {
         this.status = "Error: " + err;
         this.appendLog(this.status);
+        this.isRunning = false;
       });
+  }
+
+  // Request cancellation of the running fetch
+  onCancelRun() {
+    CancelRun()
+      .then(() => {
+        this.appendLog('[GUI] Cancel requested from frontend');
+        this.isRunning = false;
+      })
+      .catch(err => {
+        this.appendLog('[GUI] Cancel error: ' + err);
+      });
+  }
+
+  // Set access token in the backend
+  setAccessToken() {
+    SetAccessToken(this.accessTokenInput)
+      .then(() => {
+        this.appendLog('[GUI] Access token set');
+      })
+      .catch((err: any) => this.appendLog('[GUI] Set token error: ' + err));
+  }
+
+  clearAccessToken() {
+    ClearAccessToken()
+      .then(() => this.appendLog('[GUI] Access token cleared'))
+      .catch((err: any) => this.appendLog('[GUI] Clear token error: ' + err));
   }
 
   onSelectInputFile() {
