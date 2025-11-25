@@ -118,10 +118,9 @@ validate_extraction_structure() {
             valid_count=$((valid_count + 1))
         fi
         
-        # Check for metadata JSON in parent directory
-        local parent_dir=$(dirname "$series_dir")
+        # Check for metadata JSON in the central metadata directory
         local series_name=$(basename "$series_dir")
-        local json_file="$parent_dir/${series_name}.json"
+        local json_file="$base_dir/metadata/${series_name}.json"
         
         if [ ! -f "$json_file" ]; then
             echo "WARNING: Missing metadata file $json_file"

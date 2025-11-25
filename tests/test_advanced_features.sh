@@ -104,7 +104,6 @@ if ! "$NBIA_TOOL" -u "$USERNAME" --passwd "$PASSWORD" \
     -i "$MANIFEST" \
     -o "$test3_dir" \
     -p 1 \
-    --md5 \
     --debug > "$test3_dir/download.log" 2>&1; then
     print_error "MD5 validation download failed"
     cat "$test3_dir/download.log" | tail -20
@@ -133,6 +132,7 @@ mkdir -p "$test3b_dir"
     -o "$test3b_dir" \
     -p 1 \
     --no-decompress \
+    --no-md5 \
     --debug > "$test3b_dir/download.log" 2>&1
 
 # Check if ZIP files were kept

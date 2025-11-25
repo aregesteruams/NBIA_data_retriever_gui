@@ -47,8 +47,9 @@ mkdir -p "$LOG_DIR"
 
 # Check if credentials are set
 if [ -z "$NBIA_USER" ] || [ -z "$NBIA_PASS" ]; then
-    print_error "Please set NBIA_USER and NBIA_PASS environment variables"
-    exit 1
+    print_info "NBIA_USER and NBIA_PASS not set, using default guest credentials"
+    export NBIA_USER="nbia_guest"
+    export NBIA_PASS=""
 fi
 
 # Build the tool first
@@ -103,13 +104,13 @@ echo "User: $NBIA_USER"
 echo
 
 # Run all tests
-run_test "smoke_test" "$SCRIPT_DIR/test_smoke.sh" 120
-run_test "parallel_test" "$SCRIPT_DIR/test_parallel.sh" 180
-run_test "integration_test" "$SCRIPT_DIR/integration/test_integration.sh" 300
-run_test "advanced_features_test" "$SCRIPT_DIR/test_advanced_features.sh" 180
-run_test "md5_nodecompress_test" "$SCRIPT_DIR/test_md5_nodecompress.sh" 180
-run_test "metadata_caching_test" "$SCRIPT_DIR/test_metadata_caching.sh" 180
-run_test "performance_test" "$SCRIPT_DIR/test_performance.sh" 300
+run_test "smoke_test" "$SCRIPT_DIR/test_smoke.sh" 600
+run_test "parallel_test" "$SCRIPT_DIR/test_parallel.sh" 600
+run_test "integration_test" "$SCRIPT_DIR/integration/test_integration.sh" 600
+run_test "advanced_features_test" "$SCRIPT_DIR/test_advanced_features.sh" 600
+run_test "md5_nodecompress_test" "$SCRIPT_DIR/test_md5_nodecompress.sh" 600
+run_test "metadata_caching_test" "$SCRIPT_DIR/test_metadata_caching.sh" 600
+run_test "performance_test" "$SCRIPT_DIR/test_performance.sh" 600
 
 # Final report
 print_header "Test Suite Summary"

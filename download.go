@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/csv"
@@ -12,7 +13,9 @@ import (
 	"hash"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -154,29 +157,8 @@ func saveMetadataToCache(info *FileInfo, cachePath string) error {
 	return os.Rename(tempFile, cachePath)
 }
 
-// decodeTCIA is used to decode the tcia file with parallel metadata fetching
-func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options *Options) []*FileInfo {
-	logger.Debugf("decoding tcia file: %s", path)
-
-	f, err := os.Open(path)
-	if err != nil {
-		logger.Fatal(err)
-	}
-	defer f.Close()
-
-	// First, collect all series IDs
-	seriesIDs := make([]string, 0)
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.ContainsAny(line, "=") {
-			seriesIDs = append(seriesIDs, line)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		logger.Errorf("error reading tcia file: %v", err)
-	}
-
+// FetchMetadataForSeriesUIDs fetches metadata for a list of series UIDs in parallel
+func FetchMetadataForSeriesUIDs(seriesIDs []string, httpClient *http.Client, authToken *Token, options *Options) ([]*FileInfo, error) {
 	fmt.Printf("Found %d series to fetch metadata for\n", len(seriesIDs))
 
 	// Initialize metadata stats
@@ -259,6 +241,14 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 					continue
 				}
 
+				// Check for authentication errors
+				if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+					logger.Errorf("[Meta Worker %d] Authentication failed for series %s (status: %s). Please check your credentials and ensure you have access to this restricted series.", workerID, seriesID, resp.Status)
+					_ = resp.Body.Close()
+					metaStats.updateProgress("failed", seriesID)
+					continue
+				}
+
 				content, err := io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 				if err != nil {
@@ -267,11 +257,22 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 					continue
 				}
 
-				files := make([]*FileInfo, 0)
-				err = json.Unmarshal(content, &files)
+				var files []*FileInfo
+				// The API sometimes returns a single object instead of an array for a single series.
+				// We need to handle both cases.
+				if len(content) > 0 && content[0] == '[' {
+					err = json.Unmarshal(content, &files)
+				} else if len(content) > 0 {
+					var file FileInfo
+					err = json.Unmarshal(content, &file)
+					if err == nil {
+						files = []*FileInfo{&file}
+					}
+				}
+
 				if err != nil {
 					logger.Errorf("[Meta Worker %d] Failed to parse response data: %v", workerID, err)
-					logger.Debugf("%s", content)
+					logger.Debugf("%s", string(content))
 					metaStats.updateProgress("failed", seriesID)
 					continue
 				}
@@ -300,7 +301,33 @@ func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options 
 	wg.Wait()
 
 	fmt.Printf("Successfully fetched metadata for %d files\n", len(results))
-	return results
+	return results, nil
+}
+
+// decodeTCIA is used to decode the tcia file with parallel metadata fetching
+func decodeTCIA(path string, httpClient *http.Client, authToken *Token, options *Options) ([]*FileInfo, error) {
+	logger.Debugf("decoding tcia file: %s", path)
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// First, collect all series IDs
+	seriesIDs := make([]string, 0)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.ContainsAny(line, "=") {
+			seriesIDs = append(seriesIDs, line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		logger.Errorf("error reading tcia file: %v", err)
+	}
+
+	return FetchMetadataForSeriesUIDs(seriesIDs, httpClient, authToken, options)
 }
 
 type FileInfo struct {
@@ -324,6 +351,11 @@ type FileInfo struct {
 	SeriesNumber       string `json:"Series Number"`
 	MD5Hash            string `json:"MD5 Hash,omitempty"`
 	DownloadURL        string `json:"downloadUrl,omitempty"`
+	DRSURI             string `json:"drs_uri,omitempty"`
+	S5cmdManifestPath  string `json:"s5cmd_manifest_path,omitempty"`
+	FileName           string `json:"file_name,omitempty"`
+	OriginalS5cmdURI   string `json:"original_s5cmd_uri,omitempty"`
+	IsSyncJob          bool   `json:"is_sync_job,omitempty"`
 }
 
 // GetOutput construct the output directory (thread-safe)
@@ -365,6 +397,11 @@ func (info *FileInfo) NeedsDownload(output string, force bool, noDecompress bool
 	}
 
 	var targetPath string
+	if info.S5cmdManifestPath != "" {
+		// s5cmd downloads files to the output directory, so we can't check for a specific file
+		// and we assume the file needs to be downloaded.
+		return true
+	}
 	if info.DownloadURL != "" {
 		targetPath = filepath.Join(output, info.SeriesUID)
 		_, err := os.Stat(targetPath)
@@ -432,7 +469,6 @@ func (info *FileInfo) NeedsDownload(output string, force bool, noDecompress bool
 		return false
 	}
 }
-
 
 // extractAndVerifyZip extracts a ZIP file and verifies the total uncompressed size and optional MD5 hashes
 func extractAndVerifyZip(zipPath string, destDir string, expectedSize int64, md5Map map[string]string) error {
@@ -629,16 +665,16 @@ func (info *FileInfo) GetMeta(output string) error {
 }
 
 // Download is real function to download file with retry logic
-func (info *FileInfo) Download(output string, httpClient *http.Client, authToken *Token, options *Options) error {
+func (info *FileInfo) Download(output string, httpClient *http.Client, authToken *Token, gen3Auth *Gen3AuthManager, options *Options) error {
 	// Add rate limiting delay between requests
 	if options.RequestDelay > 0 {
 		time.Sleep(options.RequestDelay)
 	}
-	return info.DownloadWithRetry(output, httpClient, authToken, options)
+	return info.DownloadWithRetry(output, httpClient, authToken, gen3Auth, options)
 }
 
 // DownloadWithRetry downloads file with retry logic and exponential backoff
-func (info *FileInfo) DownloadWithRetry(output string, httpClient *http.Client, authToken *Token, options *Options) error {
+func (info *FileInfo) DownloadWithRetry(output string, httpClient *http.Client, authToken *Token, gen3Auth *Gen3AuthManager, options *Options) error {
 	var lastErr error
 	delay := options.RetryDelay
 
@@ -649,7 +685,7 @@ func (info *FileInfo) DownloadWithRetry(output string, httpClient *http.Client, 
 			delay *= 2 // Exponential backoff
 		}
 
-		err := info.doDownload(output, httpClient, authToken, options)
+		err := info.doDownload(output, httpClient, authToken, gen3Auth, options)
 		if err == nil {
 			return nil
 		}
@@ -671,6 +707,12 @@ func (info *FileInfo) DownloadWithRetry(output string, httpClient *http.Client, 
 func isRetryableError(err error) bool {
 	// Check for network errors, timeouts, and certain HTTP status codes
 	errStr := err.Error()
+
+	// s5cmd errors are generally not retryable
+	if strings.Contains(errStr, "s5cmd command failed") {
+		return false
+	}
+
 	return strings.Contains(errStr, "timeout") ||
 		strings.Contains(errStr, "connection refused") ||
 		strings.Contains(errStr, "connection reset") ||
@@ -686,18 +728,261 @@ func isRetryableError(err error) bool {
 }
 
 // doDownload is a dispatcher for different download types
-func (info *FileInfo) doDownload(output string, httpClient *http.Client, authToken *Token, options *Options) error {
+func (info *FileInfo) doDownload(output string, httpClient *http.Client, authToken *Token, gen3Auth *Gen3AuthManager, options *Options) error {
+	// For s5cmd manifest downloads, S5cmdManifestPath is set to the temporary series directory
+	if info.S5cmdManifestPath != "" {
+		return info.downloadFromS3(info.S5cmdManifestPath, options)
+	}
+	if strings.HasPrefix(info.DownloadURL, "s3://") {
+		// This handles other potential S3 downloads that are not from a manifest
+		return info.downloadFromS3(output, options)
+	}
+	if info.DRSURI != "" {
+		return info.downloadFromGen3(output, httpClient, gen3Auth, options)
+	}
 	if info.DownloadURL != "" {
-		return info.downloadDirect(output, httpClient, options)
+		return info.downloadDirect(output, httpClient)
 	}
 	return info.downloadFromTCIA(output, httpClient, authToken, options)
 }
 
+// downloadFromS3 downloads a file (or files, using a wildcard) from S3 using the s5cmd command-line tool.
+func (info *FileInfo) downloadFromS3(targetDir string, options *Options) error {
+	// Ensure the target directory exists, especially for sync jobs where the dir might have been deleted.
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("could not create target directory %s: %w", targetDir, err)
+	}
+
+	var cmd *exec.Cmd
+	if info.IsSyncJob {
+		logger.Debugf("Syncing from S3: %s to %s", info.DownloadURL, targetDir)
+		cmd = exec.Command("s5cmd",
+			"--no-sign-request",
+			"--endpoint-url", "https://s3.amazonaws.com",
+			"sync",
+			"--size-only",
+			info.DownloadURL,
+			".",
+		)
+	} else {
+		logger.Debugf("Copying from S3: %s to %s", info.DownloadURL, targetDir)
+		cmd = exec.Command("s5cmd",
+			"--no-sign-request",
+			"--endpoint-url", "https://s3.amazonaws.com",
+			"cp",
+			info.DownloadURL,
+			".",
+		)
+	}
+
+	cmd.Dir = targetDir // Run the command in the specified target directory
+
+	// Execute the command
+	stdout, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("s5cmd command failed for %s: %s\nOutput: %s", info.DownloadURL, err, string(stdout))
+	}
+
+	logger.Debugf("s5cmd output for %s:\n%s", info.DownloadURL, string(stdout))
+	return nil
+}
+
+// downloadFromGen3 downloads a file from a Gen3 server
+func (info *FileInfo) downloadFromGen3(output string, httpClient *http.Client, gen3Auth *Gen3AuthManager, options *Options) error {
+	logger.Debugf("Downloading from Gen3 DRS URI: %s", info.DRSURI)
+
+	// Parse DRS URI
+	parsedURI, err := url.Parse(info.DRSURI)
+	if err != nil {
+		return fmt.Errorf("invalid DRS URI: %s", info.DRSURI)
+	}
+	commonsURL := parsedURI.Host
+	objectID := strings.TrimPrefix(parsedURI.Path, "/")
+
+	// Get download URL from Gen3
+	objectID = url.PathEscape(objectID)
+	downloadURL, err := getGen3DownloadURL(httpClient, commonsURL, objectID, gen3Auth)
+	if err != nil {
+		return fmt.Errorf("failed to get download URL from Gen3: %v", err)
+	}
+
+	// Download the file
+	info.DownloadURL = downloadURL
+	return info.downloadDirect(output, httpClient)
+}
+
+type AccessMethod struct {
+	AccessID string `json:"access_id"`
+	Type     string `json:"type"`
+}
+
+// Gen3AuthManager handles fetching and caching of Gen3 access tokens.
+type Gen3AuthManager struct {
+	client *http.Client
+	apiKey string
+	tokens map[string]string // Cache: host -> access token
+	mu     sync.Mutex
+}
+
+// NewGen3AuthManager creates a new Gen3AuthManager.
+func NewGen3AuthManager(client *http.Client, authFile string) (*Gen3AuthManager, error) {
+	if authFile == "" {
+		// No auth file provided, return a manager that can't authenticate.
+		return &Gen3AuthManager{}, nil
+	}
+
+	keyData, err := os.ReadFile(authFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read API key file: %v", err)
+	}
+
+	var apiKeyData struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(keyData, &apiKeyData); err != nil {
+		return nil, fmt.Errorf("failed to parse API key from JSON: %v", err)
+	}
+
+	if apiKeyData.APIKey == "" {
+		return nil, fmt.Errorf("'api_key' not found in JSON key file")
+	}
+
+	return &Gen3AuthManager{
+		client: client,
+		apiKey: strings.TrimSpace(apiKeyData.APIKey),
+		tokens: make(map[string]string),
+	}, nil
+}
+
+// GetAccessToken retrieves a token for a given Gen3 host, using the cache if possible.
+func (m *Gen3AuthManager) GetAccessToken(commonsURL string) (string, error) {
+	if m.apiKey == "" {
+		return "", fmt.Errorf("Gen3 authentication requires an API key, but none was provided")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check cache first
+	if token, found := m.tokens[commonsURL]; found {
+		logger.Debugf("Using cached Gen3 access token for %s", commonsURL)
+		return token, nil
+	}
+
+	// Not in cache, fetch new token
+	logger.Infof("Fetching new Gen3 access token for %s", commonsURL)
+	token, err := getGen3AccessToken(m.client, commonsURL, m.apiKey)
+	if err != nil {
+		return "", err
+	}
+
+	// Store in cache
+	m.tokens[commonsURL] = token
+	return token, nil
+}
+
+// getGen3AccessToken retrieves an access token from Gen3 using an API key
+func getGen3AccessToken(client *http.Client, commonsURL, apiKey string) (string, error) {
+	apiEndpoint := fmt.Sprintf("https://%s/user/credentials/api/access_token", commonsURL)
+	apiKeyJSON, err := json.Marshal(map[string]string{"api_key": apiKey})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal API key: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", apiEndpoint, bytes.NewBuffer(apiKeyJSON))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request for access token: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to make request for access token: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Gen3 access token endpoint returned status %s", resp.Status)
+	}
+
+	var result map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode access token response: %v", err)
+	}
+
+	accessToken, ok := result["access_token"]
+	if !ok {
+		return "", fmt.Errorf("no 'access_token' found in Gen3 response")
+	}
+
+	logger.Infof("Successfully retrieved Gen3 access token: %s", accessToken)
+	return accessToken, nil
+}
+
+// getGen3DownloadURL retrieves the download URL from a Gen3 server
+func getGen3DownloadURL(client *http.Client, commonsURL, objectID string, gen3Auth *Gen3AuthManager) (string, error) {
+	apiEndpoint := fmt.Sprintf("https://%s/user/data/download/%s", commonsURL, objectID)
+
+	req, err := http.NewRequest("GET", apiEndpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %v", err)
+	}
+
+	// If a manager is configured and has an API key, get and use a token.
+	if gen3Auth != nil && gen3Auth.apiKey != "" {
+		accessToken, err := gen3Auth.GetAccessToken(commonsURL)
+		if err != nil {
+			return "", fmt.Errorf("failed to get access token for %s: %v", commonsURL, err)
+		}
+		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	}
+
+	// Log the request for debugging
+	logger.Warnf("Gen3 API Request URL: %s", req.URL.String())
+	for name, headers := range req.Header {
+		for _, h := range headers {
+			logger.Warnf("Gen3 API Request Header: %s: %s", name, h)
+		}
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to make request to Gen3 API: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Gen3 API returned status %s", resp.Status)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		// It's possible the response is just the URL, not a JSON object.
+		// To handle this, we can try to read the response body as a string.
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return "", fmt.Errorf("failed to decode and read Gen3 API response: %v and %v", err, readErr)
+		}
+		return string(bodyBytes), nil
+	}
+
+	accessURL, ok := result["url"].(string)
+	if !ok {
+		return "", fmt.Errorf("no 'url' found in Gen3 API response")
+	}
+
+	return accessURL, nil
+}
+
 // downloadDirect downloads a file from a direct URL without decompression
-func (info *FileInfo) downloadDirect(output string, httpClient *http.Client, options *Options) error {
+func (info *FileInfo) downloadDirect(output string, httpClient *http.Client) error {
 	logger.Debugf("Downloading direct from URL: %s", info.DownloadURL)
 
-	finalPath := filepath.Join(output, info.SeriesUID)
+	fileName := info.SeriesUID
+	if info.FileName != "" {
+		fileName = info.FileName
+	}
+	finalPath := filepath.Join(output, fileName)
 	tempPath := finalPath + ".tmp"
 
 	// Clean up any previous temporary files

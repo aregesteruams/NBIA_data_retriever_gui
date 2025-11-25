@@ -42,6 +42,7 @@ type Options struct {
 	NoDecompress    bool
 	RefreshMetadata bool
 	MetadataWorkers int
+	Auth            string
 
 	opt *getoptions.GetOpt
 }
@@ -105,6 +106,8 @@ func InitOptions() *Options {
 		opt.opt.Description("force refresh all metadata from server (ignore cache)"))
 	opt.opt.IntVar(&opt.MetadataWorkers, "metadata-workers", 20,
 		opt.opt.Description("number of parallel metadata fetch workers"))
+	opt.opt.StringVar(&opt.Auth, "auth", "",
+		opt.opt.Description("path to JSON API key file for Gen3 authentication"))
 
 	_, err := opt.opt.Parse(os.Args[1:])
 	if err != nil {
