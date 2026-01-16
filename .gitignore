@@ -62,3 +62,19 @@ Thumbs.db
 *.tar.gz
 *.zip
 checksums.txt
+
+# Python
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+venv-*/
+.Python
+env/
+ENV/
+
+# IDC workflow outputs
+scripts/idc-index-subset-*.parquet
+idc-index-subset-*.parquet
+*.parquet

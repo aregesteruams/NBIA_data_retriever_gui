@@ -1,0 +1,45 @@
+name: Generate IDC Index Subset
+
+on:
+  schedule:
+    # Daily at 6 AM UTC (1 AM EST, 10 PM PST)
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  generate-index:
+    name: Extract and Upload IDC Index
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install idc-index
+
+      - name: Generate IDC index subset
+        id: generate
+        run: |
+          cd scripts
+          python generate_idc_index.py
+          PARQUET_FILE=$(ls idc-index-subset-*.parquet)
+          echo "filename=${PARQUET_FILE}" >> $GITHUB_OUTPUT
+          echo "basename=${PARQUET_FILE%.parquet}" >> $GITHUB_OUTPUT
+          ls -lh ${PARQUET_FILE}
+
+      - name: Upload Parquet artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.generate.outputs.basename }}
+          path: scripts/${{ steps.generate.outputs.filename }}
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
